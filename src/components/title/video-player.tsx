@@ -125,6 +125,16 @@ function pickQuality(levels: QualityLevel[], preferred: Quality): Quality {
   return nearest ? nearest.key : 'auto'
 }
 
+/** 当前播放位置所处的缓冲区间末端（秒）；用于绘制进度条上的缓冲进度 */
+function bufferedEnd(video: HTMLVideoElement): number {
+  if (!Number.isFinite(video.duration)) return 0
+  const { buffered, currentTime } = video
+  for (let i = 0; i < buffered.length; i += 1) {
+    if (buffered.start(i) <= currentTime && currentTime <= buffered.end(i)) return buffered.end(i)
+  }
+  return buffered.length > 0 ? buffered.end(buffered.length - 1) : 0
+}
+
 interface VideoPlayerProps {
   title: Title
   episode?: Episode
@@ -153,6 +163,8 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
   /** 自适应模式下当前实际播放的轨道高度 */
   const [liveHeight, setLiveHeight] = useState<number | null>(null)
   const [mediaReady, setMediaReady] = useState(false)
+  /** 已缓冲到的位置（秒），用于进度条的缓冲层 */
+  const [buffered, setBuffered] = useState(0)
 
   playerRef.current = player
   progressRef.current = progress
@@ -212,7 +224,8 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
       return
     }
 
-    const hls = new Hls({ enableWorker: true })
+    // 固定前向缓冲区间，避免自适应把整片一次性缓冲完导致缓冲进度看不出边界
+    const hls = new Hls({ enableWorker: true, maxBufferLength: 30, maxMaxBufferLength: 60 })
     hlsRef.current = hls
     hls.loadSource(SOURCE_URL)
     hls.attachMedia(video)
@@ -278,13 +291,24 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
     })
   }, [dispatch])
 
+  const syncBuffered = useCallback(() => {
+    const video = videoRef.current
+    if (video) setBuffered(bufferedEnd(video))
+  }, [])
+
   /* 媒体事件回写播放状态 */
   useEffect(() => {
     const video = videoRef.current
     if (!video) return
 
-    const onTimeUpdate = () => dispatch(setPosition(video.currentTime))
-    const onDurationChange = () => dispatch(setDuration(video.duration))
+    const onTimeUpdate = () => {
+      dispatch(setPosition(video.currentTime))
+      syncBuffered()
+    }
+    const onDurationChange = () => {
+      dispatch(setDuration(video.duration))
+      syncBuffered()
+    }
     const onLoadedMetadata = () => setMediaReady(true)
     const onPlay = () => dispatch(setPlaying(true))
     const onPause = () => dispatch(setPlaying(false))
@@ -292,6 +316,7 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
     const onWaiting = () => dispatch(setBuffering(true))
     const onPlaying = () => dispatch(setBuffering(false))
     const onSeeked = () => dispatch(setBuffering(false))
+    const onProgress = () => syncBuffered()
 
     video.addEventListener('timeupdate', onTimeUpdate)
     video.addEventListener('durationchange', onDurationChange)
@@ -302,6 +327,7 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
     video.addEventListener('waiting', onWaiting)
     video.addEventListener('playing', onPlaying)
     video.addEventListener('seeked', onSeeked)
+    video.addEventListener('progress', onProgress)
     return () => {
       video.removeEventListener('timeupdate', onTimeUpdate)
       video.removeEventListener('durationchange', onDurationChange)
@@ -312,8 +338,9 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
       video.removeEventListener('waiting', onWaiting)
       video.removeEventListener('playing', onPlaying)
       video.removeEventListener('seeked', onSeeked)
+      video.removeEventListener('progress', onProgress)
     }
-  }, [dispatch])
+  }, [dispatch, syncBuffered])
 
   /* 媒体就绪（首次加载 / 切换剧集）后应用续播位置并起播 */
   useEffect(() => {
@@ -558,12 +585,13 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
           </span>
           <Slider
             value={[player.position]}
+            buffered={buffered}
             min={0}
             max={player.duration || 1}
             step={1}
             aria-label="播放进度"
             onValueChange={(value) => seekTo(value[0] ?? 0)}
-            className="[&_[data-slot=slider-range]]:bg-brand [&_[data-slot=slider-thumb]]:size-3 [&_[data-slot=slider-thumb]]:border-0 [&_[data-slot=slider-thumb]]:bg-brand [&_[data-slot=slider-track]]:h-1 [&_[data-slot=slider-track]]:bg-white/30"
+            className="[&_[data-slot=slider-buffered]]:bg-[#640D14] [&_[data-slot=slider-range]]:bg-brand [&_[data-slot=slider-thumb]]:size-3 [&_[data-slot=slider-thumb]]:border-0 [&_[data-slot=slider-thumb]]:bg-brand [&_[data-slot=slider-track]]:h-1 [&_[data-slot=slider-track]]:bg-white/20"
           />
           <span className="w-14 shrink-0 text-xs tabular-nums text-white/55">
             {formatTime(player.duration)}

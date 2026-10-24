@@ -4,14 +4,20 @@ import * as React from "react"
 import { cn } from "cn"
 import { Slider as SliderPrimitive } from "radix-ui"
 
+interface SliderProps extends React.ComponentProps<typeof SliderPrimitive.Root> {
+  /** 已缓冲进度（与 min/max 同一单位），用于在轨道上叠加缓冲层 */
+  buffered?: number
+}
+
 function Slider({
   className,
   defaultValue,
   value,
   min = 0,
   max = 100,
+  buffered,
   ...props
-}: React.ComponentProps<typeof SliderPrimitive.Root>) {
+}: SliderProps) {
   const _values = React.useMemo(
     () =>
       Array.isArray(value)
@@ -21,6 +27,11 @@ function Slider({
           : [min, max],
     [value, defaultValue, min, max]
   )
+
+  const bufferedPercent =
+    buffered !== undefined && max > min
+      ? Math.min(100, Math.max(0, ((buffered - min) / (max - min)) * 100))
+      : 0
 
   return (
     <SliderPrimitive.Root
@@ -41,6 +52,14 @@ function Slider({
           "relative grow overflow-hidden rounded-full bg-muted data-[orientation=horizontal]:h-1.5 data-[orientation=horizontal]:w-full data-[orientation=vertical]:h-full data-[orientation=vertical]:w-1.5"
         )}
       >
+        {buffered !== undefined ? (
+          <div
+            data-slot="slider-buffered"
+            aria-hidden
+            className="absolute inset-y-0 left-0 bg-white/40"
+            style={{ width: `${bufferedPercent}%` }}
+          />
+        ) : null}
         <SliderPrimitive.Range
           data-slot="slider-range"
           className={cn(
