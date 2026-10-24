@@ -238,7 +238,7 @@ export function TitleDetailPage() {
             <h3 className="text-sm font-semibold text-white/90">预告片与更多</h3>
             <p className="mt-2 text-xs leading-relaxed text-white/55">{title.trailerNote}</p>
             <p className="mt-3 text-xs leading-relaxed text-white/35">
-              视频播放能力暂为占位，接入播放内核后可在此观看预告。
+              点击播放进入播放页，画面载入演示用 HLS 测试流。
             </p>
             <Button
               className="mt-4 w-full bg-white/15 text-white hover:bg-white/25"

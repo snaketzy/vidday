@@ -1,8 +1,12 @@
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit'
 
-export type Quality = 'auto' | '1080p' | '4k'
+/** 画质档位：`auto` 为 HLS 自适应，其余取值来自实际轨道信息（如 `720p`） */
+export type Quality = string
 export type SubtitleTrack = 'off' | '简体中文' | 'English'
 export type AudioTrack = '国语配音' | '原声'
+
+/** 默认画质档位 */
+export const DEFAULT_QUALITY: Quality = '720p'
 
 export interface PlayerState {
   titleId: string | null
@@ -22,6 +26,8 @@ export interface PlayerState {
   fullscreen: boolean
   autoplayNext: boolean
   ended: boolean
+  /** 缓冲中（等待数据） */
+  buffering: boolean
 }
 
 export const initialState: PlayerState = {
@@ -32,7 +38,7 @@ export const initialState: PlayerState = {
   duration: 0,
   volume: 1,
   muted: false,
-  quality: 'auto',
+  quality: DEFAULT_QUALITY,
   subtitle: 'off',
   audio: '国语配音',
   rate: 1,
@@ -40,6 +46,7 @@ export const initialState: PlayerState = {
   fullscreen: false,
   autoplayNext: true,
   ended: false,
+  buffering: false,
 }
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value))
@@ -58,6 +65,7 @@ const playerSlice = createSlice({
       state.duration = action.payload.duration
       state.ended = false
       state.isPlaying = true
+      state.buffering = true
       state.controlsVisible = true
     },
     endSession(state) {
@@ -67,37 +75,47 @@ const playerSlice = createSlice({
       state.position = 0
       state.duration = 0
       state.ended = false
+      state.buffering = false
       state.fullscreen = false
       state.controlsVisible = true
     },
-    play(state) {
-      if (state.ended) state.position = 0
-      state.ended = false
-      state.isPlaying = true
+    /** 由播放内核回写：当前播放位置（秒） */
+    setPosition(state, action: PayloadAction<number>) {
+      state.position = clamp(action.payload, 0, state.duration || action.payload)
     },
-    pause(state) {
-      state.isPlaying = false
+    /** 由播放内核回写：真实媒体时长（秒） */
+    setDuration(state, action: PayloadAction<number>) {
+      if (!Number.isFinite(action.payload) || action.payload <= 0) return
+      state.duration = action.payload
+      state.position = clamp(state.position, 0, action.payload)
     },
-    togglePlay(state) {
-      if (state.ended) {
-        state.position = 0
+    /** 由播放内核回写：播放/暂停状态 */
+    setPlaying(state, action: PayloadAction<boolean>) {
+      state.isPlaying = action.payload
+      if (action.payload) {
+        if (state.position >= state.duration) state.position = 0
         state.ended = false
-        state.isPlaying = true
-        return
       }
-      state.isPlaying = !state.isPlaying
+    },
+    setBuffering(state, action: PayloadAction<boolean>) {
+      state.buffering = action.payload
+    },
+    markEnded(state) {
+      state.isPlaying = false
+      state.ended = true
+      state.buffering = false
     },
     seek(state, action: PayloadAction<number>) {
       state.position = clamp(action.payload, 0, state.duration)
       state.ended = false
-    },
-    seekBy(state, action: PayloadAction<number>) {
-      state.position = clamp(state.position + action.payload, 0, state.duration)
-      state.ended = false
+      state.buffering = false
     },
     setVolume(state, action: PayloadAction<number>) {
       state.volume = clamp(action.payload, 0, 1)
       state.muted = state.volume === 0
+    },
+    setMuted(state, action: PayloadAction<boolean>) {
+      state.muted = action.payload
     },
     toggleMute(state) {
       state.muted = !state.muted
@@ -126,27 +144,20 @@ const playerSlice = createSlice({
     dismissEnded(state) {
       state.ended = false
     },
-    /** 播放时钟：仅在播放中推进位置 */
-    tick(state) {
-      if (!state.isPlaying || state.duration === 0) return
-      state.position = clamp(state.position + state.rate, 0, state.duration)
-      if (state.position >= state.duration) {
-        state.isPlaying = false
-        state.ended = true
-      }
-    },
   },
 })
 
 export const {
   loadSession,
   endSession,
-  play,
-  pause,
-  togglePlay,
+  setPosition,
+  setDuration,
+  setPlaying,
+  setBuffering,
+  markEnded,
   seek,
-  seekBy,
   setVolume,
+  setMuted,
   toggleMute,
   setQuality,
   setSubtitle,
@@ -156,7 +167,6 @@ export const {
   setFullscreen,
   setAutoplayNext,
   dismissEnded,
-  tick,
 } = playerSlice.actions
 
 interface StateWithPlayer {

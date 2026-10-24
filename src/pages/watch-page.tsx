@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import { useParams } from 'react-router'
 
-import { PlayerPlaceholder } from '@/components/title/player-placeholder'
+import { VideoPlayer } from '@/components/title/video-player'
 import { NotFoundPage } from '@/pages/not-found-page'
 import { useAppSelector } from '@/store/hooks'
 import { selectTitleById } from '@/store/slices/catalog-slice'
@@ -21,5 +21,5 @@ export function WatchPage() {
   if (!title) return <NotFoundPage />
   if (episodeId && !episode) return <NotFoundPage />
 
-  return <PlayerPlaceholder title={title} episode={episode} />
+  return <VideoPlayer title={title} episode={episode} />
 }

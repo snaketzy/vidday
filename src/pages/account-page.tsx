@@ -36,7 +36,8 @@ import {
 const QUALITY_OPTIONS: { value: Quality; label: string }[] = [
   { value: 'auto', label: '自动（推荐）' },
   { value: '1080p', label: '1080p' },
-  { value: '4k', label: '4K HDR' },
+  { value: '720p', label: '720p' },
+  { value: '480p', label: '480p' },
 ]
 
 const SUBTITLE_OPTIONS: { value: SubtitleTrack; label: string }[] = [

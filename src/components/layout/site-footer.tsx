@@ -41,7 +41,7 @@ export function SiteFooter() {
 
         <p className="mt-10 text-xs leading-relaxed text-white/30">
           vidday 是一个高保真前端演示项目：全部影片信息、观众档案与播放数据均为 mock 内容，
-          视频播放能力暂以占位呈现，未接入真实播放内核，也不提供任何影视内容的观看或下载服务。
+          播放画面来自演示用 HLS 测试流，不提供任何影视内容的观看或下载服务。
         </p>
       </div>
     </footer>
