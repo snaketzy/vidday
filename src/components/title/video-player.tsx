@@ -19,7 +19,7 @@ import {
   VolumeX,
   X,
 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
 import { cn } from 'cn'
 import { useNavigate } from 'react-router'
 
@@ -90,18 +90,99 @@ const menuClass = 'border-white/10 bg-[#181818] text-white'
 /** 由轨道高度推导展示名 */
 const heightLabel = (height: number) => (height >= 2160 ? '4K' : `${height}p`)
 
+const clampPercent = (value: number, max: number) => Math.min(100, Math.max(0, (value / max) * 100))
+
+const formatBitsPerSecond = (value: number | null) => {
+  if (!value || !Number.isFinite(value) || value <= 0) return '--'
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(2)} Mbps`
+  return `${Math.round(value / 1_000)} Kbps`
+}
+
+const formatBytes = (value: number | null) => {
+  if (!value || !Number.isFinite(value) || value <= 0) return '--'
+  if (value >= 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(2)} MB`
+  return `${Math.round(value / 1024)} KB`
+}
+
+const formatRange = (value?: string) => {
+  if (!value) return 'bt709 / SDR'
+  return value.toUpperCase() === 'PQ' ? 'bt2020 / HDR' : 'bt709 / SDR'
+}
+
+const createSessionCode = () =>
+  Math.random()
+    .toString(36)
+    .slice(2, 18)
+    .toUpperCase()
+
+type VideoPlaybackQualityWithWebkit = HTMLVideoElement & {
+  webkitDecodedFrameCount?: number
+  webkitDroppedFrameCount?: number
+}
+
+function readPlaybackFrames(video: HTMLVideoElement) {
+  const qualityVideo = video as VideoPlaybackQualityWithWebkit
+  if (typeof qualityVideo.getVideoPlaybackQuality === 'function') {
+    const quality = qualityVideo.getVideoPlaybackQuality()
+    const total = quality.totalVideoFrames ?? 0
+    const dropped = quality.droppedVideoFrames ?? 0
+    return { total, dropped }
+  }
+  return {
+    total: qualityVideo.webkitDecodedFrameCount ?? 0,
+    dropped: qualityVideo.webkitDroppedFrameCount ?? 0,
+  }
+}
+
+function optimalLevelForViewport(levels: QualityLevel[], width: number, height: number) {
+  if (levels.length === 0) return null
+  const byWidth = [...levels].sort((a, b) => a.width - b.width)
+  return byWidth.find((level) => level.width >= width && level.height >= height) ?? byWidth[byWidth.length - 1]
+}
+
+function recentNetworkActivity(sourceHost: string) {
+  if (typeof performance === 'undefined' || typeof performance.getEntriesByType !== 'function') return null
+  const now = performance.now()
+  const recent = performance
+    .getEntriesByType('resource')
+    .filter(
+      (entry): entry is PerformanceResourceTiming =>
+        entry instanceof PerformanceResourceTiming &&
+        entry.name.includes(sourceHost) &&
+        now - entry.responseEnd <= 5000,
+    )
+  if (recent.length === 0) return null
+  const bytes = recent.reduce((sum, entry) => sum + (entry.transferSize || entry.encodedBodySize || 0), 0)
+  return bytes > 0 ? bytes : null
+}
+
 interface QualityLevel {
   /** hls.js 中的轨道索引，用于手动切档 */
   index: number
   /** 档位标识（同时作为 Redux 中的取值），如 `720p` */
   key: string
   label: string
+  width: number
   height: number
+  frameRate: number | null
   bitrate: number
+  audioCodec?: string
+  videoCodec?: string
+  videoRange?: string
 }
 
 /** 依据 HLS 轨道信息生成画质选项：同高度仅保留码率最高的一条，并按清晰度降序 */
-function toQualityLevels(levels: { height: number; bitrate: number }[]): QualityLevel[] {
+function toQualityLevels(
+  levels: Array<{
+    height?: number
+    width?: number
+    frameRate?: number
+    bitrate: number
+    audioCodec?: string
+    videoCodec?: string
+    videoRange?: string
+  }>,
+): QualityLevel[] {
   const byHeight = new Map<number, QualityLevel>()
   levels.forEach((level, index) => {
     if (!level.height) return
@@ -111,8 +192,13 @@ function toQualityLevels(levels: { height: number; bitrate: number }[]): Quality
       index,
       key: `${level.height}p`,
       label: heightLabel(level.height),
+      width: level.width ?? 0,
       height: level.height,
+      frameRate: level.frameRate ?? null,
       bitrate: level.bitrate,
+      audioCodec: level.audioCodec,
+      videoCodec: level.videoCodec,
+      videoRange: level.videoRange,
     })
   })
   return [...byHeight.values()].sort((a, b) => b.height - a.height)
@@ -132,19 +218,76 @@ function pickQuality(levels: QualityLevel[], preferred: Quality): Quality {
   return nearest ? nearest.key : 'auto'
 }
 
-/** 当前播放位置所处的缓冲区间末端（秒）；用于绘制进度条上的缓冲进度 */
-function bufferedEnd(video: HTMLVideoElement): number {
-  if (!Number.isFinite(video.duration)) return 0
+interface BufferedWindow {
+  end: number
+  health: number
+}
+
+/** 当前播放点所在的连续缓冲区；进度条与 Buffer Health 共用这套计算 */
+function bufferedWindow(video: HTMLVideoElement): BufferedWindow {
+  if (!Number.isFinite(video.duration)) return { end: 0, health: 0 }
   const { buffered, currentTime } = video
   for (let i = 0; i < buffered.length; i += 1) {
-    if (buffered.start(i) <= currentTime && currentTime <= buffered.end(i)) return buffered.end(i)
+    const start = buffered.start(i)
+    const end = buffered.end(i)
+    if (start <= currentTime && currentTime <= end) {
+      return {
+        end,
+        health: Math.max(0, end - currentTime),
+      }
+    }
   }
-  return buffered.length > 0 ? buffered.end(buffered.length - 1) : 0
+  return { end: 0, health: 0 }
 }
 
 interface VideoPlayerProps {
   title: Title
   episode?: Episode
+}
+
+interface ContextMenuState {
+  x: number
+  y: number
+}
+
+interface NerdStats {
+  playbackState: string
+  viewport: string
+  frames: string
+  currentRes: string
+  volume: string
+  codecs: string
+  color: string
+  connectionSpeed: string
+  connectionSpeedBps: number | null
+  networkActivity: string
+  networkActivityBytes: number | null
+  bufferHealth: string
+  bufferHealthSeconds: number | null
+  mysteryText: string
+  timestamp: string
+}
+
+function StatsRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="grid grid-cols-[170px_minmax(0,1fr)] items-baseline gap-4">
+      <span className="text-right font-semibold text-white">{label}</span>
+      <span className="truncate text-white/95">{value}</span>
+    </div>
+  )
+}
+
+function StatsMeter({ value, percent }: { value: string; percent: number }) {
+  return (
+    <div className="grid grid-cols-[minmax(0,220px)_minmax(0,1fr)] items-center gap-4">
+      <div className="h-5 overflow-hidden rounded-sm bg-black/80">
+        <div className="flex h-full items-center bg-[#7bc1b7]" style={{ width: `${percent}%` }}>
+          <div className="ml-auto h-full w-16 bg-[#bfe3a7]/90" />
+        </div>
+      </div>
+      <span className="truncate text-white/95">{value}</span>
+    </div>
+  )
 }
 
 /**
@@ -184,6 +327,28 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
   const [adDuration, setAdDuration] = useState(0)
   /** 是否已满 5s、可跳过 */
   const [adSkippable, setAdSkippable] = useState(false)
+  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
+  const [statsVisible, setStatsVisible] = useState(false)
+  const sourceHost = useMemo(() => new URL(SOURCE_URL).host, [])
+  const sourcePlaybackId = useMemo(() => SOURCE_URL.match(/stream\.mux\.com\/([^/.]+)/)?.[1] ?? 'unknown', [])
+  const sessionCode = useMemo(() => createSessionCode(), [])
+  const [nerdStats, setNerdStats] = useState<NerdStats>({
+    playbackState: '初始化中',
+    viewport: '--',
+    frames: '--',
+    currentRes: '--',
+    volume: '--',
+    codecs: '--',
+    color: 'bt709 / SDR',
+    connectionSpeed: '--',
+    connectionSpeedBps: null,
+    networkActivity: '--',
+    networkActivityBytes: null,
+    bufferHealth: '--',
+    bufferHealthSeconds: null,
+    mysteryText: 'Mux HLS / waiting for first sample',
+    timestamp: new Date().toLocaleString('zh-CN'),
+  })
 
   playerRef.current = player
   progressRef.current = progress
@@ -312,7 +477,7 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
 
   const syncBuffered = useCallback(() => {
     const video = videoRef.current
-    if (video) setBuffered(bufferedEnd(video))
+    if (video) setBuffered(bufferedWindow(video).end)
   }, [])
 
   /** 结束广告：收起覆盖层并恢复正片播放 */
@@ -522,11 +687,111 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
     return () => document.removeEventListener('fullscreenchange', onChange)
   }, [dispatch])
 
+  const closeContextMenu = useCallback(() => setContextMenu(null), [])
+
+  useEffect(() => {
+    if (!contextMenu) return
+    const handleClose = () => setContextMenu(null)
+    window.addEventListener('pointerdown', handleClose)
+    window.addEventListener('blur', handleClose)
+    return () => {
+      window.removeEventListener('pointerdown', handleClose)
+      window.removeEventListener('blur', handleClose)
+    }
+  }, [contextMenu])
+
+  const openContextMenu = useCallback(
+    (event: MouseEvent<HTMLDivElement>) => {
+      event.preventDefault()
+      wake()
+      const rect = containerRef.current?.getBoundingClientRect()
+      const menuWidth = 196
+      const menuHeight = 54
+      const x = rect ? Math.min(event.clientX - rect.left, rect.width - menuWidth - 12) : event.clientX
+      const y = rect ? Math.min(event.clientY - rect.top, rect.height - menuHeight - 12) : event.clientY
+      setContextMenu({ x: Math.max(12, x), y: Math.max(12, y) })
+    },
+    [wake],
+  )
+
+  const refreshNerdStats = useCallback(() => {
+    const video = videoRef.current
+    const rect = containerRef.current?.getBoundingClientRect()
+    if (!video || !rect) return
+
+    const hls = hlsRef.current
+    const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1
+    const frames = readPlaybackFrames(video)
+    const activeLevel =
+      hls && hls.currentLevel >= 0 ? hls.levels[hls.currentLevel] : undefined
+    const activeQuality = activeLevel
+      ? levels.find((level) => level.height === activeLevel.height && level.width === activeLevel.width) ?? null
+      : levels.find((level) => level.key === playerRef.current.quality) ?? null
+    const optimalLevel = optimalLevelForViewport(levels, rect.width * dpr, rect.height * dpr)
+    const bufferWindowState = bufferedWindow(video)
+    const forwardBuffer = bufferWindowState.health
+    const bandwidthEstimate = hls ? hls.bandwidthEstimate : null
+    const recentBytes = recentNetworkActivity(sourceHost)
+    const fps = activeQuality?.frameRate ?? null
+    const currentWidth = video.videoWidth || activeQuality?.width || 0
+    const currentHeight = video.videoHeight || activeQuality?.height || 0
+    const optimalRes = optimalLevel
+      ? `${optimalLevel.width}x${optimalLevel.height}${optimalLevel.frameRate ? `@${Math.round(optimalLevel.frameRate)}` : ''}`
+      : '--'
+    const stateLabel = adActiveRef.current
+      ? '广告中'
+      : playerRef.current.ended
+        ? '已结束'
+        : playerRef.current.buffering
+          ? '缓冲中'
+          : playerRef.current.isPlaying
+            ? '播放中'
+            : '暂停'
+
+    setNerdStats({
+      playbackState: stateLabel,
+      viewport: `${Math.round(rect.width)}x${Math.round(rect.height)}*${dpr.toFixed(2)}`,
+      frames: `${frames.dropped} dropped of ${frames.total}`,
+      currentRes:
+        currentWidth && currentHeight
+          ? `${currentWidth}x${currentHeight}${fps ? `@${Math.round(fps)}` : ''} / ${optimalRes}`
+          : `-- / ${optimalRes}`,
+      volume: `${Math.round((playerRef.current.muted ? 0 : playerRef.current.volume) * 100)}% / ${playerRef.current.rate}x`,
+      codecs: `${activeLevel?.videoCodec ?? activeQuality?.videoCodec ?? '--'} / ${activeLevel?.audioCodec ?? activeQuality?.audioCodec ?? '--'}`,
+      color: formatRange(activeQuality?.videoRange),
+      connectionSpeed: formatBitsPerSecond(bandwidthEstimate),
+      connectionSpeedBps: bandwidthEstimate && Number.isFinite(bandwidthEstimate) ? bandwidthEstimate : null,
+      networkActivity: formatBytes(recentBytes),
+      networkActivityBytes: recentBytes,
+      bufferHealth: `${forwardBuffer.toFixed(2)} s`,
+      bufferHealthSeconds: forwardBuffer,
+      mysteryText: `${sourcePlaybackId} q:${playerRef.current.quality} live:${liveHeight ? `${liveHeight}p` : 'n/a'} pos:${video.currentTime.toFixed(2)} buf:${bufferWindowState.end.toFixed(2)}`,
+      timestamp: new Date().toLocaleString('zh-CN'),
+    })
+  }, [buffered, levels, liveHeight, sourceHost, sourcePlaybackId])
+
+  useEffect(() => {
+    if (!statsVisible) return
+    refreshNerdStats()
+    const timer = window.setInterval(refreshNerdStats, 1000)
+    return () => window.clearInterval(timer)
+  }, [refreshNerdStats, statsVisible])
+
   /* 快捷键 */
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return
+      if (event.key === 'Escape' && contextMenu) {
+        event.preventDefault()
+        closeContextMenu()
+        return
+      }
+      if (event.key === 'Escape' && statsVisible) {
+        event.preventDefault()
+        setStatsVisible(false)
+        return
+      }
       // 广告播放期间屏蔽正片控制，仅保留返回
       if (adActiveRef.current) {
         if (event.key === 'Escape' && !document.fullscreenElement) navigate(-1)
@@ -560,7 +825,7 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [dispatch, navigate, toggleFullscreen, togglePlayback, seekRelative, wake])
+  }, [closeContextMenu, contextMenu, dispatch, navigate, seekRelative, statsVisible, toggleFullscreen, togglePlayback, wake])
 
   /* 播放结束：自动播放下一集 */
   useEffect(() => {
@@ -579,6 +844,7 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
       ref={containerRef}
       className="relative h-screen w-screen select-none overflow-hidden bg-black text-white"
       onMouseMove={wake}
+      onContextMenu={openContextMenu}
     >
       <video
         ref={videoRef}
@@ -712,6 +978,51 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
             </Button>
           </div>
         </div>
+      ) : null}
+
+      {/* Stats for nerds：类似 YouTube 的实时播放诊断浮层 */}
+      {statsVisible ? (
+        <section className="absolute left-4 top-4 z-40 max-w-[min(760px,calc(100vw-2rem))] rounded-2xl bg-[rgba(33,33,33,0.82)] px-5 py-4 text-[15px] leading-7 shadow-[0_18px_60px_rgba(0,0,0,0.45)] backdrop-blur md:left-6 md:top-6">
+          <button
+            type="button"
+            aria-label="关闭播放统计"
+            className="absolute right-3 top-2 text-xl text-white/90 transition hover:text-white"
+            onClick={() => setStatsVisible(false)}
+          >
+            [x]
+          </button>
+          <div className="space-y-0.5 pr-8">
+            <StatsRow label="Video ID / sCPN" value={`${sourcePlaybackId} / ${sessionCode}`} />
+            <StatsRow label="Viewport / Frames" value={`${nerdStats.viewport} / ${nerdStats.frames}`} />
+            <StatsRow label="State / Current Res" value={`${nerdStats.playbackState} / ${nerdStats.currentRes}`} />
+            <StatsRow label="Volume / Speed" value={nerdStats.volume} />
+            <StatsRow label="Codecs" value={nerdStats.codecs} />
+            <StatsRow label="Color" value={nerdStats.color} />
+            <div className="grid grid-cols-[170px_minmax(0,1fr)] gap-4 pt-1">
+              <span className="text-right font-semibold text-white">Connection Speed</span>
+              <StatsMeter
+                value={nerdStats.connectionSpeed}
+                percent={clampPercent((nerdStats.connectionSpeedBps ?? 0) / 1000, 24000)}
+              />
+            </div>
+            <div className="grid grid-cols-[170px_minmax(0,1fr)] gap-4">
+              <span className="text-right font-semibold text-white">Network Activity</span>
+              <StatsMeter
+                value={nerdStats.networkActivity}
+                percent={clampPercent(nerdStats.networkActivityBytes ?? 0, 1024 * 1024)}
+              />
+            </div>
+            <div className="grid grid-cols-[170px_minmax(0,1fr)] gap-4">
+              <span className="text-right font-semibold text-white">Buffer Health</span>
+              <StatsMeter
+                value={nerdStats.bufferHealth}
+                percent={clampPercent(nerdStats.bufferHealthSeconds ?? 0, 60)}
+              />
+            </div>
+            <StatsRow label="Mystery Text" value={nerdStats.mysteryText} />
+            <StatsRow label="Date" value={nerdStats.timestamp} />
+          </div>
+        </section>
       ) : null}
 
       {/* 底部控制栏 */}
@@ -1011,6 +1322,27 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
             ))}
           </div>
         </aside>
+      ) : null}
+
+      {/* 播放器专属右键菜单 */}
+      {contextMenu ? (
+        <div
+          className="absolute z-50 min-w-48 rounded-xl border border-white/10 bg-[#1b1b1b]/95 p-1.5 shadow-[0_14px_40px_rgba(0,0,0,0.45)] backdrop-blur"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+          onPointerDown={(event) => event.stopPropagation()}
+        >
+          <button
+            type="button"
+            className="flex w-full items-center rounded-lg px-3 py-2 text-left text-sm text-white transition hover:bg-white/10"
+            onClick={() => {
+              setStatsVisible((visible) => !visible)
+              setContextMenu(null)
+              wake()
+            }}
+          >
+            {statsVisible ? 'Hide stats for nerds' : 'Stats for nerds'}
+          </button>
+        </div>
       ) : null}
     </div>
   )
