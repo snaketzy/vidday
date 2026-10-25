@@ -68,8 +68,12 @@ import {
 import { recordProgress } from '@/store/slices/watch-slice'
 import type { Episode, Title } from '@/types'
 
-/** 演示用播放源：Mux 多码率 HLS（master playlist，含多档画质轨道） */
+/**
+ * 播放源：多码率 HLS master playlist（含多档画质轨道）。
+ * 可用 VITE_SOURCE_URL 覆盖，便于切换 Mux / Cloudflare Stream 对比验证。
+ */
 const SOURCE_URL =
+  import.meta.env.VITE_SOURCE_URL ||
   'https://stream.mux.com/Hg37FhWh8alFwmfHi5PZiaof00OBWd9usBNk00PoT02wRU.m3u8'
 
 const SUBTITLE_OPTIONS: SubtitleTrack[] = ['off', '简体中文', 'English']
@@ -92,9 +96,9 @@ const heightLabel = (height: number) => (height >= 2160 ? '4K' : `${height}p`)
 
 const clampPercent = (value: number, max: number) => Math.min(100, Math.max(0, (value / max) * 100))
 
+/** 连接速度统一以 Kbps 展示 */
 const formatBitsPerSecond = (value: number | null) => {
   if (!value || !Number.isFinite(value) || value <= 0) return '--'
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(2)} Mbps`
   return `${Math.round(value / 1_000)} Kbps`
 }
 
