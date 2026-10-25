@@ -731,6 +731,8 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
     main.pause()
     adActiveRef.current = true
     setAdActive(true)
+    // 广告覆盖层会盖住播放器，顺手收起可能已打开的右键菜单
+    setContextMenu(null)
     setAdSkippable(false)
     setAdPosition(0)
     setAdDuration(0)
@@ -935,9 +937,12 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
 
   const openContextMenu = useCallback(
     (event: MouseEvent<HTMLDivElement>) => {
-      // 始终屏蔽浏览器原生菜单，但诊断入口只在开发环境弹出
+      // 始终屏蔽浏览器原生菜单
       event.preventDefault()
+      // 广告时段不响应右键，与生产环境表现一致
+      if (adActiveRef.current) return
       wake()
+      // 诊断入口只在开发环境弹出
       if (!STATS_FOR_NERDS_ENABLED) return
       const rect = containerRef.current?.getBoundingClientRect()
       const menuWidth = 196
