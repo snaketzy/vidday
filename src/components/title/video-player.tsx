@@ -79,6 +79,9 @@ const SOURCE_URL =
 
 const CONTROLS_TIMEOUT = 3200
 
+/** Stats for nerds 是调试能力，仅在开发环境提供，生产构建下彻底不出现 */
+const STATS_FOR_NERDS_ENABLED = import.meta.env.DEV
+
 /** 演示用广告素材：本地自托管实拍素材（Pexels，2K 2560×1440，约 33s） */
 const AD_SOURCE = '/ads/ad-sample.mp4'
 /** 中插广告间隔（秒）：正片每播放 60s 触发一次 */
@@ -142,20 +145,71 @@ function optimalLevelForViewport(levels: QualityLevel[], width: number, height: 
   return byWidth.find((level) => level.width >= width && level.height >= height) ?? byWidth[byWidth.length - 1]
 }
 
-function recentNetworkActivity(sourceHost: string) {
-  if (typeof performance === 'undefined' || typeof performance.getEntriesByType !== 'function') return null
-  const now = performance.now()
-  const recent = performance
-    .getEntriesByType('resource')
-    .filter(
-      (entry): entry is PerformanceResourceTiming =>
-        entry instanceof PerformanceResourceTiming &&
-        entry.name.includes(sourceHost) &&
-        now - entry.responseEnd <= 5000,
-    )
-  if (recent.length === 0) return null
-  const bytes = recent.reduce((sum, entry) => sum + (entry.transferSize || entry.encodedBodySize || 0), 0)
-  return bytes > 0 ? bytes : null
+/** Network Activity 的统计窗口（毫秒） */
+const NETWORK_WINDOW_MS = 5000
+
+/**
+ * hls.js 透传的底层网络对象：默认 XhrLoader 为 XMLHttpRequest，
+ * 若换成 fetch 版 loader 则为 Response。
+ */
+type NetworkDetailsLike = XMLHttpRequest | Response | null
+
+/**
+ * cf-ray 结尾的三字码是 Cloudflare 接入机房（IATA 代码）。
+ * 这里只收录常见节点用于中文标注，未收录的原样显示三字码。
+ */
+const EDGE_COLO_LABELS: Record<string, string> = {
+  HKG: '香港',
+  TPE: '台北',
+  NRT: '东京',
+  KIX: '大阪',
+  ICN: '首尔',
+  SIN: '新加坡',
+  BKK: '曼谷',
+  KUL: '吉隆坡',
+  MNL: '马尼拉',
+  HAN: '河内',
+  SGN: '胡志明市',
+  CGK: '雅加达',
+  DEL: '新德里',
+  BOM: '孟买',
+  SYD: '悉尼',
+  MEL: '墨尔本',
+  LAX: '洛杉矶',
+  SJC: '圣何塞',
+  SEA: '西雅图',
+  DFW: '达拉斯',
+  ORD: '芝加哥',
+  IAD: '阿什本',
+  ATL: '亚特兰大',
+  YYZ: '多伦多',
+  GRU: '圣保罗',
+  LHR: '伦敦',
+  AMS: '阿姆斯特丹',
+  FRA: '法兰克福',
+  CDG: '巴黎',
+  MAD: '马德里',
+  DXB: '迪拜',
+  WAW: '华沙',
+  ARN: '斯德哥尔摩',
+}
+
+/** 从响应头读取当前接入机房，cf-ray 形如 `a5033e168faa26d1-HKG` */
+function edgeColoFromResponse(networkDetails: NetworkDetailsLike): string | null {
+  if (!networkDetails) return null
+  const ray =
+    networkDetails instanceof XMLHttpRequest
+      ? networkDetails.getResponseHeader('cf-ray')
+      : networkDetails.headers.get('cf-ray')
+  const colo = ray?.split('-').pop()?.trim().toUpperCase()
+  return colo && /^[A-Z]{3}$/.test(colo) ? colo : null
+}
+
+/** 组装机房展示文案，如 `香港（HKG）`；未收录的节点只显示三字码 */
+function formatServingNode(colo: string | null): string {
+  if (!colo) return '--'
+  const label = EDGE_COLO_LABELS[colo]
+  return label ? `${label}（${colo}）` : colo
 }
 
 interface QualityLevel {
@@ -302,10 +356,11 @@ interface NerdStats {
   volume: string
   codecs: string
   color: string
+  servingNode: string
   connectionSpeed: string
   connectionSpeedBps: number | null
   networkActivity: string
-  networkActivityBytes: number | null
+  networkActivityPercent: number
   bufferHealth: string
   bufferHealthSeconds: number | null
   mysteryText: string
@@ -347,6 +402,10 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const adVideoRef = useRef<HTMLVideoElement>(null)
   const hlsRef = useRef<Hls | null>(null)
+  /** 最近一次分片请求命中的 Cloudflare 接入机房三字码 */
+  const edgeColoRef = useRef<string | null>(null)
+  /** 最近 5 秒内完成下载的分片样本，用于统计实时下载量 */
+  const fragSamplesRef = useRef<{ at: number; bytes: number }[]>([])
   /** 当前是否处于广告播放中（供事件回调读取，避免闭包过期） */
   const adActiveRef = useRef(false)
   /** 当前广告计时窗口的起点（秒）：自该位置起正片实际播放满 60s 触发广告 */
@@ -373,7 +432,6 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
   const [adSkippable, setAdSkippable] = useState(false)
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
   const [statsVisible, setStatsVisible] = useState(false)
-  const sourceHost = useMemo(() => new URL(SOURCE_URL).host, [])
   const sourcePlaybackId = useMemo(
     () => SOURCE_URL.match(/cloudflarestream\.com\/([^/]+)\//)?.[1] ?? 'unknown',
     [],
@@ -387,10 +445,11 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
     volume: '--',
     codecs: '--',
     color: 'bt709 / SDR',
+    servingNode: '--',
     connectionSpeed: '--',
     connectionSpeedBps: null,
     networkActivity: '--',
-    networkActivityBytes: null,
+    networkActivityPercent: 0,
     bufferHealth: '--',
     bufferHealthSeconds: null,
     mysteryText: 'CF Stream HLS / waiting for first sample',
@@ -483,6 +542,34 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
     })
     hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, publishTracks)
     hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, publishTracks)
+
+    /* 从实际分片 / 媒体播放列表响应里读取接入机房（仅 Cloudflare 会回 cf-ray） */
+    const captureEdgeColo = (_event: unknown, data: { networkDetails?: NetworkDetailsLike }) => {
+      const colo = edgeColoFromResponse(data.networkDetails ?? null)
+      if (colo) edgeColoRef.current = colo
+    }
+    hls.on(Hls.Events.FRAG_LOADED, captureEdgeColo)
+    hls.on(Hls.Events.LEVEL_LOADED, captureEdgeColo)
+
+    /*
+     * 下载量取自 hls.js 自己的分片统计，而不是 Resource Timing：
+     * 跨域资源缺少 Timing-Allow-Origin 时浏览器会把字节数一律上报为 0。
+     */
+    const recordFragLoad = (
+      _event: unknown,
+      data: { frag: { stats: { loaded: number; total: number; loading: { start: number } } } },
+    ) => {
+      const stats = data.frag.stats
+      const bytes = stats.loaded || stats.total
+      if (!bytes) return
+      // 按「开始下载的时刻」入窗：下载本身只有一两秒，之后的缓冲间歇也归属这段窗口，
+      // 否则读数会在两次分片之间掉回 `--`
+      const samples = fragSamplesRef.current
+      samples.push({ at: stats.loading.start, bytes })
+      const cutoff = performance.now() - NETWORK_WINDOW_MS
+      while (samples.length > 0 && samples[0].at < cutoff) samples.shift()
+    }
+    hls.on(Hls.Events.FRAG_LOADED, recordFragLoad)
     hls.on(Hls.Events.ERROR, (_event, data) => {
       if (!data.fatal) return
       if (data.type === Hls.ErrorTypes.NETWORK_ERROR) hls.startLoad()
@@ -848,8 +935,10 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
 
   const openContextMenu = useCallback(
     (event: MouseEvent<HTMLDivElement>) => {
+      // 始终屏蔽浏览器原生菜单，但诊断入口只在开发环境弹出
       event.preventDefault()
       wake()
+      if (!STATS_FOR_NERDS_ENABLED) return
       const rect = containerRef.current?.getBoundingClientRect()
       const menuWidth = 196
       const menuHeight = 54
@@ -877,7 +966,15 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
     const bufferWindowState = bufferedWindow(video)
     const forwardBuffer = bufferWindowState.health
     const bandwidthEstimate = hls ? hls.bandwidthEstimate : null
-    const recentBytes = recentNetworkActivity(sourceHost)
+    // 滑动窗口只保留最近 5 秒的分片，这里顺手丢弃过期样本
+    const networkSamples = fragSamplesRef.current
+    const networkCutoff = performance.now() - NETWORK_WINDOW_MS
+    while (networkSamples.length > 0 && networkSamples[0].at < networkCutoff) networkSamples.shift()
+    const networkBytes = networkSamples.reduce((sum, sample) => sum + sample.bytes, 0)
+    // 刻度按当前档位的平均码率自适应：满格即「刚好按码率下载」
+    const levelBitrate = activeLevel?.averageBitrate ?? activeLevel?.bitrate ?? 0
+    const levelBytesPerWindow = (levelBitrate / 8) * (NETWORK_WINDOW_MS / 1000)
+    const networkPercent = levelBytesPerWindow > 0 ? clampPercent(networkBytes, levelBytesPerWindow) : 0
     const fps = activeQuality?.frameRate ?? null
     const currentWidth = video.videoWidth || activeQuality?.width || 0
     const currentHeight = video.videoHeight || activeQuality?.height || 0
@@ -905,16 +1002,17 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
       volume: `${Math.round((playerRef.current.muted ? 0 : playerRef.current.volume) * 100)}% / ${playerRef.current.rate}x`,
       codecs: `${activeLevel?.videoCodec ?? activeQuality?.videoCodec ?? '--'} / ${activeLevel?.audioCodec ?? activeQuality?.audioCodec ?? '--'}`,
       color: formatRange(activeQuality?.videoRange),
+      servingNode: formatServingNode(edgeColoRef.current),
       connectionSpeed: formatBitsPerSecond(bandwidthEstimate),
       connectionSpeedBps: bandwidthEstimate && Number.isFinite(bandwidthEstimate) ? bandwidthEstimate : null,
-      networkActivity: formatBytes(recentBytes),
-      networkActivityBytes: recentBytes,
+      networkActivity: networkBytes > 0 ? `${formatBytes(networkBytes)} / 5s` : '--',
+      networkActivityPercent: networkPercent,
       bufferHealth: `${forwardBuffer.toFixed(2)} s`,
       bufferHealthSeconds: forwardBuffer,
       mysteryText: `${sourcePlaybackId} q:${playerRef.current.quality} live:${liveHeight ? `${liveHeight}p` : 'n/a'} pos:${video.currentTime.toFixed(2)} buf:${bufferWindowState.end.toFixed(2)}`,
       timestamp: new Date().toLocaleString('zh-CN'),
     })
-  }, [buffered, levels, liveHeight, sourceHost, sourcePlaybackId])
+  }, [buffered, levels, liveHeight, sourcePlaybackId])
 
   useEffect(() => {
     if (!statsVisible) return
@@ -1128,8 +1226,8 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
         </div>
       ) : null}
 
-      {/* Stats for nerds：类似 YouTube 的实时播放诊断浮层 */}
-      {statsVisible ? (
+      {/* Stats for nerds：类似 YouTube 的实时播放诊断浮层（仅开发环境） */}
+      {STATS_FOR_NERDS_ENABLED && statsVisible ? (
         <section className="absolute left-4 top-4 z-40 max-w-[min(760px,calc(100vw-2rem))] rounded-2xl bg-[rgba(33,33,33,0.82)] px-5 py-4 text-[15px] leading-7 shadow-[0_18px_60px_rgba(0,0,0,0.45)] backdrop-blur md:left-6 md:top-6">
           <button
             type="button"
@@ -1146,6 +1244,7 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
             <StatsRow label="Volume / Speed" value={nerdStats.volume} />
             <StatsRow label="Codecs" value={nerdStats.codecs} />
             <StatsRow label="Color" value={nerdStats.color} />
+            <StatsRow label="Serving Node" value={nerdStats.servingNode} />
             <div className="grid grid-cols-[170px_minmax(0,1fr)] gap-4 pt-1">
               <span className="text-right font-semibold text-white">Connection Speed</span>
               <StatsMeter
@@ -1157,7 +1256,7 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
               <span className="text-right font-semibold text-white">Network Activity</span>
               <StatsMeter
                 value={nerdStats.networkActivity}
-                percent={clampPercent(nerdStats.networkActivityBytes ?? 0, 1024 * 1024)}
+                percent={nerdStats.networkActivityPercent}
               />
             </div>
             <div className="grid grid-cols-[170px_minmax(0,1fr)] gap-4">
@@ -1485,8 +1584,8 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
         </aside>
       ) : null}
 
-      {/* 播放器专属右键菜单 */}
-      {contextMenu ? (
+      {/* 播放器专属右键菜单，目前只承载 Stats for nerds，因此同样仅开发环境构建 */}
+      {STATS_FOR_NERDS_ENABLED && contextMenu ? (
         <div
           className="absolute z-50 min-w-48 rounded-xl border border-white/10 bg-[#1b1b1b]/95 p-1.5 shadow-[0_14px_40px_rgba(0,0,0,0.45)] backdrop-blur"
           style={{ left: contextMenu.x, top: contextMenu.y }}
