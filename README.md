@@ -56,4 +56,4 @@ npm run dev
 
 ## 说明
 
-视频源采用 https://stream.mux.com/XceDtWCR2F01InyWrAcI00JeLtWCDPcOjN4g01im00Y0100FQ.m3u8
+视频源采用 https://stream.mux.com/Hg37FhWh8alFwmfHi5PZiaof00OBWd9usBNk00PoT02wRU.m3u8

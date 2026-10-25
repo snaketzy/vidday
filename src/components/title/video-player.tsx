@@ -70,12 +70,19 @@ import type { Episode, Title } from '@/types'
 
 /** 演示用播放源：Mux 多码率 HLS（master playlist，含多档画质轨道） */
 const SOURCE_URL =
-  'https://stream.mux.com/XceDtWCR2F01InyWrAcI00JeLtWCDPcOjN4g01im00Y0100FQ.m3u8'
+  'https://stream.mux.com/Hg37FhWh8alFwmfHi5PZiaof00OBWd9usBNk00PoT02wRU.m3u8'
 
 const SUBTITLE_OPTIONS: SubtitleTrack[] = ['off', '简体中文', 'English']
 const AUDIO_OPTIONS: AudioTrack[] = ['国语配音', '原声']
 
 const CONTROLS_TIMEOUT = 3200
+
+/** 演示用广告素材：本地自托管实拍素材（Pexels，2K 2560×1440，约 33s） */
+const AD_SOURCE = '/ads/ad-sample.mp4'
+/** 中插广告间隔（秒）：正片每播放 60s 触发一次 */
+const AD_INTERVAL = 60
+/** 广告可跳过前的强制观看时长（秒） */
+const AD_SKIP_AFTER = 5
 
 const controlClass = 'text-white hover:bg-white/15 focus-visible:ring-white/40'
 const menuClass = 'border-white/10 bg-[#181818] text-white'
@@ -151,7 +158,12 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
   const progress = useAppSelector((state) => state.watch.progress)
   const containerRef = useRef<HTMLDivElement>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
+  const adVideoRef = useRef<HTMLVideoElement>(null)
   const hlsRef = useRef<Hls | null>(null)
+  /** 当前是否处于广告播放中（供事件回调读取，避免闭包过期） */
+  const adActiveRef = useRef(false)
+  /** 当前广告计时窗口的起点（秒）：自该位置起正片实际播放满 60s 触发广告 */
+  const adAnchorRef = useRef(0)
   const hideTimer = useRef<number | undefined>(undefined)
   /** 续播进度占比（0-1）：演示流时长与 mock 时长不同，按比例映射到真实时长 */
   const resumeRef = useRef(0)
@@ -165,6 +177,13 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
   const [mediaReady, setMediaReady] = useState(false)
   /** 已缓冲到的位置（秒），用于进度条的缓冲层 */
   const [buffered, setBuffered] = useState(0)
+  /** 是否正在播放中插广告 */
+  const [adActive, setAdActive] = useState(false)
+  /** 广告播放位置 / 时长（秒） */
+  const [adPosition, setAdPosition] = useState(0)
+  const [adDuration, setAdDuration] = useState(0)
+  /** 是否已满 5s、可跳过 */
+  const [adSkippable, setAdSkippable] = useState(false)
 
   playerRef.current = player
   progressRef.current = progress
@@ -296,6 +315,75 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
     if (video) setBuffered(bufferedEnd(video))
   }, [])
 
+  /** 结束广告：收起覆盖层并恢复正片播放 */
+  const endAd = useCallback(() => {
+    const ad = adVideoRef.current
+    if (ad) ad.pause()
+    adActiveRef.current = false
+    setAdActive(false)
+    setAdSkippable(false)
+    startPlayback()
+  }, [startPlayback])
+
+  /** 开始播放中插广告：暂停正片、装载并播放广告素材 */
+  const startAd = useCallback(() => {
+    const ad = adVideoRef.current
+    const main = videoRef.current
+    if (!ad || !main) return
+    main.pause()
+    adActiveRef.current = true
+    setAdActive(true)
+    setAdSkippable(false)
+    setAdPosition(0)
+    setAdDuration(0)
+    ad.currentTime = 0
+    ad.volume = playerRef.current.muted ? 0 : playerRef.current.volume
+    ad.muted = playerRef.current.muted
+    void ad.play().catch(() => {
+      // 自动播放被拦截：静音重试，用户可手动开声
+      ad.muted = true
+      void ad.play().catch(() => endAd())
+    })
+  }, [endAd])
+
+  /* 广告媒体事件：回写进度、时长，并在播完时结束广告 */
+  useEffect(() => {
+    const ad = adVideoRef.current
+    if (!ad) return
+
+    const onTimeUpdate = () => {
+      setAdPosition(ad.currentTime)
+      setAdSkippable(ad.currentTime >= AD_SKIP_AFTER)
+    }
+    const onLoadedMetadata = () => setAdDuration(Number.isFinite(ad.duration) ? ad.duration : 0)
+    const onEnded = () => endAd()
+    // 素材加载失败时不再静默收起，留痕便于排查
+    const onError = () => {
+      console.error('[ad] 广告素材加载失败', AD_SOURCE, ad.error)
+      endAd()
+    }
+
+    ad.addEventListener('timeupdate', onTimeUpdate)
+    ad.addEventListener('loadedmetadata', onLoadedMetadata)
+    ad.addEventListener('ended', onEnded)
+    ad.addEventListener('error', onError)
+    return () => {
+      ad.removeEventListener('timeupdate', onTimeUpdate)
+      ad.removeEventListener('loadedmetadata', onLoadedMetadata)
+      ad.removeEventListener('ended', onEnded)
+      ad.removeEventListener('error', onError)
+    }
+  }, [endAd])
+
+  /* 中插调度：自上次广告或拖动进度以来，正片实际播放满 60s 触发一次广告 */
+  useEffect(() => {
+    if (adActive) return
+    if (player.position - adAnchorRef.current >= AD_INTERVAL) {
+      adAnchorRef.current = player.position
+      startAd()
+    }
+  }, [player.position, adActive, startAd])
+
   /* 媒体事件回写播放状态 */
   useEffect(() => {
     const video = videoRef.current
@@ -350,6 +438,8 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
     const limit = Number.isFinite(video.duration) ? Math.max(0, video.duration - 1) : 0
     const target = Math.min(resumeRef.current * limit, limit)
     video.currentTime = target
+    // 切换剧集 / 重新加载后重置广告计时窗口
+    adAnchorRef.current = target
     video.volume = playerRef.current.volume
     video.muted = playerRef.current.muted
     video.playbackRate = playerRef.current.rate
@@ -395,6 +485,8 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
       const limit = Number.isFinite(video.duration) ? video.duration : 0
       const target = Math.min(Math.max(seconds, 0), limit)
       video.currentTime = target
+      // 手动跳转（拖动进度条 / 快进快退）后重置广告计时
+      adAnchorRef.current = target
       dispatch(seek(target))
     },
     [dispatch],
@@ -435,6 +527,11 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return
+      // 广告播放期间屏蔽正片控制，仅保留返回
+      if (adActiveRef.current) {
+        if (event.key === 'Escape' && !document.fullscreenElement) navigate(-1)
+        return
+      }
       switch (event.key) {
         case ' ':
         case 'k':
@@ -500,6 +597,51 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
           wake()
         }}
       />
+
+      {/* 中插广告：素材常驻挂载以便绑定媒体事件，仅在广告时段显示 */}
+      <video
+        ref={adVideoRef}
+        src={AD_SOURCE}
+        className={cn(
+          'absolute inset-0 z-50 h-full w-full bg-black object-contain',
+          adActive ? 'block' : 'hidden',
+        )}
+        playsInline
+        preload="metadata"
+      />
+
+      {/* 广告时段 UI：角标、进度与 5s 后出现的跳过按钮 */}
+      {adActive ? (
+        <div className="absolute inset-0 z-50">
+          <div className="pointer-events-none absolute inset-x-0 top-0 flex items-center gap-2 bg-gradient-to-b from-black/70 to-transparent p-4 md:p-6">
+            <span className="rounded bg-brand px-2 py-0.5 text-[11px] font-semibold text-white">广告</span>
+            <span className="text-xs text-white/70">赞助内容</span>
+          </div>
+          <div className="absolute inset-x-0 bottom-0 flex items-end gap-4 bg-gradient-to-t from-black/85 to-transparent px-4 pb-5 pt-16 md:px-6">
+            <div className="min-w-0 flex-1">
+              <p className="text-xs tabular-nums text-white/70">
+                {`广告 ${formatTime(adPosition)} / ${formatTime(adDuration)}`}
+              </p>
+              <div className="mt-2 h-1 w-full overflow-hidden rounded-full bg-white/25">
+                <div
+                  className="h-full rounded-full bg-brand"
+                  style={{ width: `${adDuration > 0 ? Math.min(100, (adPosition / adDuration) * 100) : 0}%` }}
+                />
+              </div>
+            </div>
+            {adSkippable ? (
+              <Button className="shrink-0 gap-2 bg-white text-black hover:bg-white/85" onClick={endAd}>
+                <SkipForward className="size-4" />
+                跳过广告
+              </Button>
+            ) : (
+              <div className="shrink-0 rounded-md border border-white/25 px-3 py-2 text-xs tabular-nums text-white/80">
+                {`${Math.max(1, Math.ceil(AD_SKIP_AFTER - adPosition))} 秒后可跳过`}
+              </div>
+            )}
+          </div>
+        </div>
+      ) : null}
 
       {/* 缓冲指示 */}
       {player.buffering && player.isPlaying && !player.ended ? (
