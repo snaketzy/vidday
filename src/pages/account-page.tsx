@@ -23,14 +23,13 @@ import {
   selectProfiles,
 } from '@/store/slices/auth-slice'
 import {
+  SUBTITLE_OFF,
   selectPlayer,
   setAudio,
   setAutoplayNext,
   setQuality,
   setSubtitle,
-  type AudioTrack,
   type Quality,
-  type SubtitleTrack,
 } from '@/store/slices/player-slice'
 
 const QUALITY_OPTIONS: { value: Quality; label: string }[] = [
@@ -38,17 +37,6 @@ const QUALITY_OPTIONS: { value: Quality; label: string }[] = [
   { value: '1080p', label: '1080p' },
   { value: '720p', label: '720p' },
   { value: '480p', label: '480p' },
-]
-
-const SUBTITLE_OPTIONS: { value: SubtitleTrack; label: string }[] = [
-  { value: 'off', label: '关闭' },
-  { value: '简体中文', label: '简体中文' },
-  { value: 'English', label: 'English' },
-]
-
-const AUDIO_OPTIONS: { value: AudioTrack; label: string }[] = [
-  { value: '国语配音', label: '国语配音' },
-  { value: '原声', label: '原声' },
 ]
 
 const selectTriggerClass = 'w-44 border-white/15 bg-[#181818] text-white'
@@ -62,6 +50,13 @@ export function AccountPage() {
   const player = useAppSelector(selectPlayer)
 
   if (!account) return null
+
+  // 字幕 / 音轨选项来自视频源的真实轨道，仅在打开过播放页后才可用
+  const subtitleOptions = [
+    { value: SUBTITLE_OFF, label: '关闭' },
+    ...player.subtitleTracks.map((track) => ({ value: track.key, label: track.label })),
+  ]
+  const audioOptions = player.audioTracks.map((track) => ({ value: track.key, label: track.label }))
 
   const planRows = [
     { label: '会员邮箱', value: account.email },
@@ -188,13 +183,13 @@ export function AccountPage() {
               </div>
               <Select
                 value={player.subtitle}
-                onValueChange={(value) => dispatch(setSubtitle(value as SubtitleTrack))}
+                onValueChange={(value) => dispatch(setSubtitle(value))}
               >
                 <SelectTrigger className={selectTriggerClass}>
-                  <SelectValue />
+                  <SelectValue placeholder="未选择" />
                 </SelectTrigger>
                 <SelectContent className="border-white/10 bg-[#181818] text-white">
-                  {SUBTITLE_OPTIONS.map((option) => (
+                  {subtitleOptions.map((option) => (
                     <SelectItem key={option.value} value={option.value} className="cursor-pointer">
                       {option.label}
                     </SelectItem>
@@ -206,18 +201,24 @@ export function AccountPage() {
             <div className="flex flex-wrap items-center gap-3">
               <div className="min-w-0 flex-1">
                 <p className="text-sm text-white/85">默认音轨</p>
-                <p className="text-xs text-white/45">支持国语配音与原声切换</p>
+                <p className="text-xs text-white/45">取自视频源提供的真实音轨</p>
               </div>
-              <Select value={player.audio} onValueChange={(value) => dispatch(setAudio(value as AudioTrack))}>
+              <Select value={player.audio} onValueChange={(value) => dispatch(setAudio(value))}>
                 <SelectTrigger className={selectTriggerClass}>
-                  <SelectValue />
+                  <SelectValue placeholder="未选择" />
                 </SelectTrigger>
                 <SelectContent className="border-white/10 bg-[#181818] text-white">
-                  {AUDIO_OPTIONS.map((option) => (
-                    <SelectItem key={option.value} value={option.value} className="cursor-pointer">
-                      {option.label}
+                  {audioOptions.length > 0 ? (
+                    audioOptions.map((option) => (
+                      <SelectItem key={option.value} value={option.value} className="cursor-pointer">
+                        {option.label}
+                      </SelectItem>
+                    ))
+                  ) : (
+                    <SelectItem value="__unavailable" disabled>
+                      打开播放页后可选择
                     </SelectItem>
-                  ))}
+                  )}
                 </SelectContent>
               </Select>
             </div>

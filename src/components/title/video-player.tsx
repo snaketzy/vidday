@@ -42,6 +42,7 @@ import { useAppDispatch, useAppSelector } from '@/store/hooks'
 import {
   DEFAULT_QUALITY,
   PLAYBACK_RATES,
+  SUBTITLE_OFF,
   endSession,
   loadSession,
   markEnded,
@@ -53,6 +54,7 @@ import {
   setControlsVisible,
   setDuration,
   setFullscreen,
+  setMediaTracks,
   setMuted,
   setPlaying,
   setPosition,
@@ -61,23 +63,19 @@ import {
   setSubtitle,
   setVolume,
   toggleMute,
-  type AudioTrack,
+  type MediaTrackOption,
   type Quality,
-  type SubtitleTrack,
 } from '@/store/slices/player-slice'
 import { recordProgress } from '@/store/slices/watch-slice'
 import type { Episode, Title } from '@/types'
 
 /**
- * 播放源：多码率 HLS master playlist（含多档画质轨道）。
- * 可用 VITE_SOURCE_URL 覆盖，便于切换 Mux / Cloudflare Stream 对比验证。
+ * 播放源：Cloudflare Stream 多码率 HLS master playlist，
+ * 轨道信息（音轨 / 字幕）在装载后从播放内核读取，不做写死。
  */
 const SOURCE_URL =
-  import.meta.env.VITE_SOURCE_URL ||
-  'https://stream.mux.com/Hg37FhWh8alFwmfHi5PZiaof00OBWd9usBNk00PoT02wRU.m3u8'
-
-const SUBTITLE_OPTIONS: SubtitleTrack[] = ['off', '简体中文', 'English']
-const AUDIO_OPTIONS: AudioTrack[] = ['国语配音', '原声']
+  // import.meta.env.VITE_SOURCE_URL ||
+  'https://customer-juxwzlg9p7suy0ju.cloudflarestream.com/66d514fd69385d3e701c8c9b96ff107b/manifest/video.m3u8'
 
 const CONTROLS_TIMEOUT = 3200
 
@@ -222,6 +220,48 @@ function pickQuality(levels: QualityLevel[], preferred: Quality): Quality {
   return nearest ? nearest.key : 'auto'
 }
 
+/** 播放内核轨道信息（hls.js 的 MediaPlaylist / 原生 textTracks 都能映射到该结构） */
+interface MediaPlaylistLike {
+  name?: string
+  lang?: string
+  default?: boolean
+}
+
+/** 把播放内核的真实轨道转成下拉选项；同名轨道追加序号保证 key 唯一 */
+function toMediaTrackOptions(tracks: MediaPlaylistLike[], fallbackPrefix: string): MediaTrackOption[] {
+  const used = new Map<string, number>()
+  return tracks.map((track, index) => {
+    const label = track.name || track.lang || `${fallbackPrefix} ${index + 1}`
+    const seen = used.get(label) ?? 0
+    used.set(label, seen + 1)
+    return {
+      key: seen === 0 ? label : `${label}#${seen + 1}`,
+      label,
+      index,
+      isDefault: Boolean(track.default),
+    }
+  })
+}
+
+/** 原生 HLS 的音轨接口（仅 Safari 实现），用于降级路径 */
+interface NativeAudioTrack {
+  enabled: boolean
+  label?: string
+  language?: string
+}
+
+type VideoWithAudioTracks = HTMLVideoElement & {
+  audioTracks?: { length: number; [index: number]: NativeAudioTrack | undefined }
+}
+
+function nativeAudioTracks(video: HTMLVideoElement): NativeAudioTrack[] {
+  const tracks = (video as VideoWithAudioTracks).audioTracks
+  if (!tracks) return []
+  return Array.from({ length: tracks.length }, (_, index) => tracks[index]).filter(
+    (track): track is NativeAudioTrack => Boolean(track),
+  )
+}
+
 interface BufferedWindow {
   end: number
   health: number
@@ -334,7 +374,10 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
   const [statsVisible, setStatsVisible] = useState(false)
   const sourceHost = useMemo(() => new URL(SOURCE_URL).host, [])
-  const sourcePlaybackId = useMemo(() => SOURCE_URL.match(/stream\.mux\.com\/([^/.]+)/)?.[1] ?? 'unknown', [])
+  const sourcePlaybackId = useMemo(
+    () => SOURCE_URL.match(/cloudflarestream\.com\/([^/]+)\//)?.[1] ?? 'unknown',
+    [],
+  )
   const sessionCode = useMemo(() => createSessionCode(), [])
   const [nerdStats, setNerdStats] = useState<NerdStats>({
     playbackState: '初始化中',
@@ -350,7 +393,7 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
     networkActivityBytes: null,
     bufferHealth: '--',
     bufferHealthSeconds: null,
-    mysteryText: 'Mux HLS / waiting for first sample',
+    mysteryText: 'CF Stream HLS / waiting for first sample',
     timestamp: new Date().toLocaleString('zh-CN'),
   })
 
@@ -418,15 +461,28 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
     hls.loadSource(SOURCE_URL)
     hls.attachMedia(video)
 
+    /* 从播放内核读取当前视频源的真实轨道，回写到状态供下拉渲染 */
+    const publishTracks = () => {
+      dispatch(
+        setMediaTracks({
+          subtitleTracks: toMediaTrackOptions(hls.subtitleTracks, '字幕'),
+          audioTracks: toMediaTrackOptions(hls.audioTracks, '音轨'),
+        }),
+      )
+    }
+
     hls.on(Hls.Events.MANIFEST_PARSED, () => {
       const list = toQualityLevels(hls.levels)
       setLevels(list)
       dispatch(setQuality(pickQuality(list, qualityRef.current)))
+      publishTracks()
     })
     hls.on(Hls.Events.LEVEL_SWITCHED, (_event, data) => {
       const level = hls.levels[data.level]
       setLiveHeight(level ? level.height : null)
     })
+    hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, publishTracks)
+    hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, publishTracks)
     hls.on(Hls.Events.ERROR, (_event, data) => {
       if (!data.fatal) return
       if (data.type === Hls.ErrorTypes.NETWORK_ERROR) hls.startLoad()
@@ -451,6 +507,92 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
     const level = levels.find((item) => item.key === player.quality)
     if (level) hls.currentLevel = level.index
   }, [player.quality, levels])
+
+  /* 原生 HLS（Safari 旧版）：从 video 元素读取真实字幕 / 音轨 */
+  useEffect(() => {
+    const video = videoRef.current
+    if (!video || hlsRef.current) return
+
+    const publishTracks = () => {
+      const subtitles: MediaTrackOption[] = []
+      const textTracks = video.textTracks
+      for (let i = 0; i < textTracks.length; i += 1) {
+        const track = textTracks[i]
+        if (!track || (track.kind !== 'subtitles' && track.kind !== 'captions')) continue
+        const label = track.label || track.language || `字幕 ${subtitles.length + 1}`
+        subtitles.push({ key: label, label, index: i, isDefault: track.mode === 'showing' })
+      }
+      const audios = nativeAudioTracks(video).map((track, index) => {
+        const label = track.label || track.language || `音轨 ${index + 1}`
+        return { key: label, label, index, isDefault: track.enabled }
+      })
+      dispatch(setMediaTracks({ subtitleTracks: subtitles, audioTracks: audios }))
+    }
+
+    // 轨道信息异步到达：既监听 textTracks 变更，也在元数据就绪时兜底读一次
+    const tracks = video.textTracks
+    tracks.addEventListener('addtrack', publishTracks)
+    tracks.addEventListener('change', publishTracks)
+    tracks.addEventListener('removetrack', publishTracks)
+    video.addEventListener('loadedmetadata', publishTracks)
+    publishTracks()
+    return () => {
+      tracks.removeEventListener('addtrack', publishTracks)
+      tracks.removeEventListener('change', publishTracks)
+      tracks.removeEventListener('removetrack', publishTracks)
+      video.removeEventListener('loadedmetadata', publishTracks)
+    }
+  }, [dispatch])
+
+  /* 音轨 / 字幕选择下发到播放内核 */
+  useEffect(() => {
+    const hls = hlsRef.current
+    if (hls) {
+      if (player.subtitle === SUBTITLE_OFF) {
+        hls.subtitleDisplay = false
+        hls.subtitleTrack = -1
+      } else {
+        const track = player.subtitleTracks.find((item) => item.key === player.subtitle)
+        if (track) {
+          hls.subtitleTrack = track.index
+          hls.subtitleDisplay = true
+        }
+      }
+      const audio = player.audioTracks.find((item) => item.key === player.audio)
+      if (audio) hls.audioTrack = audio.index
+      return
+    }
+
+    // 原生 HLS：直接切换 video 元素的轨道
+    const video = videoRef.current
+    if (!video) return
+    const textTracks = video.textTracks
+    for (let i = 0; i < textTracks.length; i += 1) {
+      const track = textTracks[i]
+      if (!track) continue
+      const option = player.subtitleTracks.find((item) => item.index === i)
+      if (!option) continue
+      track.mode = option.key === player.subtitle ? 'showing' : 'disabled'
+    }
+    const activeAudio = player.audioTracks.find((item) => item.key === player.audio)
+    if (activeAudio) {
+      nativeAudioTracks(video).forEach((track, index) => {
+        track.enabled = index === activeAudio.index
+      })
+    }
+  }, [player.subtitle, player.audio, player.subtitleTracks, player.audioTracks])
+
+  /* 轨道列表变化后校正选择：字幕失效则关闭，音轨失效则回退到源默认轨 */
+  useEffect(() => {
+    const { subtitleTracks, audioTracks, subtitle, audio } = playerRef.current
+    if (subtitleTracks.length > 0 && subtitle !== SUBTITLE_OFF && !subtitleTracks.some((item) => item.key === subtitle)) {
+      dispatch(setSubtitle(SUBTITLE_OFF))
+    }
+    if (audioTracks.length > 0 && !audioTracks.some((item) => item.key === audio)) {
+      const fallback = audioTracks.find((item) => item.isDefault) ?? audioTracks[0]
+      if (fallback) dispatch(setAudio(fallback.key))
+    }
+  }, [dispatch, player.subtitle, player.audio, player.subtitleTracks, player.audioTracks])
 
   /* 音量 / 静音 / 倍速下发到播放内核 */
   useEffect(() => {
@@ -842,6 +984,8 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
   const episodeLabel = episode ? `第 ${episode.season} 季 第 ${episode.number} 集 · ${episode.title}` : null
   const autoSuffix =
     player.quality === 'auto' && liveHeight ? `（当前 ${heightLabel(liveHeight)}）` : ''
+  const subtitleLabel = player.subtitleTracks.find((track) => track.key === player.subtitle)?.label
+  const audioLabel = player.audioTracks.find((track) => track.key === player.audio)?.label
 
   return (
     <div
@@ -1182,23 +1326,30 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
                   className={cn(controlClass, 'gap-2 px-2 text-sm')}
                 >
                   <Captions className="size-5" />
-                  {player.subtitle !== 'off' ? (
-                    <span className="hidden text-xs sm:inline">{player.subtitle}</span>
-                  ) : null}
+                  {subtitleLabel ? <span className="hidden text-xs sm:inline">{subtitleLabel}</span> : null}
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className={menuClass}>
                 <DropdownMenuLabel className="text-xs text-white/45">字幕</DropdownMenuLabel>
                 <DropdownMenuRadioGroup
                   value={player.subtitle}
-                  onValueChange={(value) => dispatch(setSubtitle(value as SubtitleTrack))}
+                  onValueChange={(value) => dispatch(setSubtitle(value))}
+                  className="max-h-80 overflow-y-auto"
                 >
-                  {SUBTITLE_OPTIONS.map((track) => (
-                    <DropdownMenuRadioItem key={track} value={track} className="cursor-pointer">
-                      {track === 'off' ? '关闭' : track}
+                  <DropdownMenuRadioItem value={SUBTITLE_OFF} className="cursor-pointer">
+                    关闭
+                  </DropdownMenuRadioItem>
+                  {player.subtitleTracks.map((track) => (
+                    <DropdownMenuRadioItem key={track.key} value={track.key} className="cursor-pointer">
+                      {track.label}
                     </DropdownMenuRadioItem>
                   ))}
                 </DropdownMenuRadioGroup>
+                {player.subtitleTracks.length === 0 ? (
+                  <DropdownMenuItem disabled className="text-xs text-white/40">
+                    正在读取字幕信息…
+                  </DropdownMenuItem>
+                ) : null}
               </DropdownMenuContent>
             </DropdownMenu>
 
@@ -1210,21 +1361,27 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
                   className={cn(controlClass, 'gap-2 px-2 text-sm')}
                 >
                   <Languages className="size-5" />
-                  <span className="hidden text-xs lg:inline">{player.audio}</span>
+                  {audioLabel ? <span className="hidden text-xs lg:inline">{audioLabel}</span> : null}
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className={menuClass}>
                 <DropdownMenuLabel className="text-xs text-white/45">音轨</DropdownMenuLabel>
                 <DropdownMenuRadioGroup
                   value={player.audio}
-                  onValueChange={(value) => dispatch(setAudio(value as AudioTrack))}
+                  onValueChange={(value) => dispatch(setAudio(value))}
+                  className="max-h-80 overflow-y-auto"
                 >
-                  {AUDIO_OPTIONS.map((track) => (
-                    <DropdownMenuRadioItem key={track} value={track} className="cursor-pointer">
-                      {track}
+                  {player.audioTracks.map((track) => (
+                    <DropdownMenuRadioItem key={track.key} value={track.key} className="cursor-pointer">
+                      {track.label}
                     </DropdownMenuRadioItem>
                   ))}
                 </DropdownMenuRadioGroup>
+                {player.audioTracks.length === 0 ? (
+                  <DropdownMenuItem disabled className="text-xs text-white/40">
+                    正在读取音轨信息…
+                  </DropdownMenuItem>
+                ) : null}
               </DropdownMenuContent>
             </DropdownMenu>
 

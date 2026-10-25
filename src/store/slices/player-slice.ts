@@ -2,11 +2,28 @@ import { createSlice, type PayloadAction } from '@reduxjs/toolkit'
 
 /** 画质档位：`auto` 为 HLS 自适应，其余取值来自实际轨道信息（如 `720p`） */
 export type Quality = string
-export type SubtitleTrack = 'off' | '简体中文' | 'English'
-export type AudioTrack = '国语配音' | '原声'
+/** 字幕轨取值：`off` 表示关闭，其余为实际字幕轨的标识 */
+export type SubtitleTrack = string
+/** 音轨取值：实际音轨的标识 */
+export type AudioTrack = string
 
 /** 默认画质档位 */
 export const DEFAULT_QUALITY: Quality = '720p'
+
+/** 字幕关闭时的取值 */
+export const SUBTITLE_OFF: SubtitleTrack = 'off'
+
+/** 播放内核发现的轨道选项：音轨与字幕共用同一结构 */
+export interface MediaTrackOption {
+  /** 轨道标识，同时作为 Redux 中的取值 */
+  key: string
+  /** 展示名，取自视频源的真实轨道信息 */
+  label: string
+  /** 播放内核中的轨道下标 */
+  index: number
+  /** 是否为视频源的默认轨道 */
+  isDefault: boolean
+}
 
 export interface PlayerState {
   titleId: string | null
@@ -21,6 +38,10 @@ export interface PlayerState {
   quality: Quality
   subtitle: SubtitleTrack
   audio: AudioTrack
+  /** 由播放内核回写：当前视频源的真实字幕轨 */
+  subtitleTracks: MediaTrackOption[]
+  /** 由播放内核回写：当前视频源的真实音轨 */
+  audioTracks: MediaTrackOption[]
   rate: number
   controlsVisible: boolean
   fullscreen: boolean
@@ -39,8 +60,10 @@ export const initialState: PlayerState = {
   volume: 1,
   muted: false,
   quality: DEFAULT_QUALITY,
-  subtitle: 'off',
-  audio: '国语配音',
+  subtitle: SUBTITLE_OFF,
+  audio: '',
+  subtitleTracks: [],
+  audioTracks: [],
   rate: 1,
   controlsVisible: true,
   fullscreen: false,
@@ -129,6 +152,14 @@ const playerSlice = createSlice({
     setAudio(state, action: PayloadAction<AudioTrack>) {
       state.audio = action.payload
     },
+    /** 由播放内核回写：当前视频源的真实音轨 / 字幕轨列表 */
+    setMediaTracks(
+      state,
+      action: PayloadAction<{ subtitleTracks: MediaTrackOption[]; audioTracks: MediaTrackOption[] }>,
+    ) {
+      state.subtitleTracks = action.payload.subtitleTracks
+      state.audioTracks = action.payload.audioTracks
+    },
     setRate(state, action: PayloadAction<number>) {
       state.rate = action.payload
     },
@@ -162,6 +193,7 @@ export const {
   setQuality,
   setSubtitle,
   setAudio,
+  setMediaTracks,
   setRate,
   setControlsVisible,
   setFullscreen,
