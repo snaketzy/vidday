@@ -14,5 +14,13 @@ export default defineConfig({
   server: {
     port: 5173,
     host: true,
+    proxy: {
+      // 本地开发代理：把跨源 HLS 请求转成同源，规避源站未配置 CORS
+      '/hls': {
+        target: 'http://media.laybackzzz.com',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/hls/, ''),
+      },
+    },
   },
 })

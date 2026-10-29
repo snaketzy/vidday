@@ -70,13 +70,14 @@ import { recordProgress } from '@/store/slices/watch-slice'
 import type { Episode, Title } from '@/types'
 
 /**
- * 播放源：Cloudflare Stream 多码率 HLS master playlist，
+ * 播放源：多码率 HLS master playlist，
  * 轨道信息（音轨 / 字幕）在装载后从播放内核读取，不做写死。
+ * 开发环境走 Vite 代理（/hls）转成同源，规避源站未配置 CORS。
  */
 const SOURCE_URL =
   // import.meta.env.VITE_SOURCE_URL ||
-  'https://customer-juxwzlg9p7suy0ju.cloudflarestream.com/66d514fd69385d3e701c8c9b96ff107b/manifest/video.m3u8'
-
+  // 'https://customer-juxwzlg9p7suy0ju.cloudflarestream.com/66d514fd69385d3e701c8c9b96ff107b/manifest/video.m3u8'
+  '/hls/HLS/tt22022452/HEVC/master.m3u8'
 const CONTROLS_TIMEOUT = 3200
 
 /** Stats for nerds 是调试能力，仅在开发环境提供，生产构建下彻底不出现 */
@@ -859,8 +860,13 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
   const toggleFullscreen = useCallback(() => {
     const el = containerRef.current
     if (!el) return
-    if (document.fullscreenElement) void document.exitFullscreen()
-    else void el.requestFullscreen?.()
+    if (document.fullscreenElement) {
+      void document.exitFullscreen()
+      return
+    }
+    // 不吞掉失败：被 iframe 的 permissions policy 拦截时能立刻看到原因
+    const request = el.requestFullscreen?.()
+    if (request) void request.catch((error) => console.warn('[player] 进入全屏失败：', error))
   }, [])
 
   const togglePlayback = useCallback(() => {
