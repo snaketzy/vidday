@@ -77,11 +77,14 @@ const SOURCE_URL =
   // import.meta.env.VITE_SOURCE_URL ||
   // 'https://customer-juxwzlg9p7suy0ju.cloudflarestream.com/66d514fd69385d3e701c8c9b96ff107b/manifest/video.m3u8'
   // 'http://media.laybackzzz.com/test/winnie/hls/master.m3u8'
-  'http://media.laybackzzz.com/HLS/tt22022452/HEVC/master.m3u8'
+  'http://media.laybackzzz.com/HLS/tt22022452/H264/master.m3u8'
 const CONTROLS_TIMEOUT = 3200
 
 /** Stats for nerds 是调试能力，仅在开发环境提供，生产构建下彻底不出现 */
 const STATS_FOR_NERDS_ENABLED = import.meta.env.DEV
+
+/** 广告总开关：由 VITE_ENABLE_ADS 控制，仅显式设为 'false' 时关闭，默认开启 */
+const ADS_ENABLED = import.meta.env.VITE_ENABLE_ADS !== 'false'
 
 /** 演示用广告素材：本地自托管实拍素材（Pexels，2K 2560×1440，约 33s） */
 const AD_SOURCE = '/ads/ad-sample.mp4'
@@ -582,7 +585,9 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
       hls.destroy()
       hlsRef.current = null
     }
-  }, [dispatch])
+    // 依赖必须带上 SOURCE_URL：否则改播放源后（含 Vite HMR）不会重建 hls 实例，
+    // 页面会一直卡在旧源（例如已失效的 HEVC 流）上，表现为「换了源还是放不出来」
+  }, [dispatch, SOURCE_URL])
 
   /* 画质切档：auto 交还自适应，其余档位锁定到对应轨道 */
   useEffect(() => {
@@ -778,7 +783,7 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
 
   /* 中插调度：自上次广告或拖动进度以来，正片实际播放满 60s 触发一次广告 */
   useEffect(() => {
-    if (adActive) return
+    if (!ADS_ENABLED || adActive) return
     if (player.position - adAnchorRef.current >= AD_INTERVAL) {
       adAnchorRef.current = player.position
       startAd()
