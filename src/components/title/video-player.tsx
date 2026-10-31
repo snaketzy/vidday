@@ -1,4 +1,7 @@
 import Hls from 'hls.js'
+import { PgsRenderer } from 'libpgs'
+// worker 必须交给打包器产出真实地址：照 README 写 './node_modules/...' 在 Vite 下会 404
+import pgsWorkerUrl from 'libpgs/dist/libpgs.worker.js?url'
 import {
   ArrowLeft,
   Captions,
@@ -61,6 +64,7 @@ import {
   setQuality,
   setRate,
   setSubtitle,
+  setPgsTracks,
   setVolume,
   toggleMute,
   type MediaTrackOption,
@@ -77,8 +81,16 @@ const SOURCE_URL =
   // import.meta.env.VITE_SOURCE_URL ||
   // 'https://customer-juxwzlg9p7suy0ju.cloudflarestream.com/66d514fd69385d3e701c8c9b96ff107b/manifest/video.m3u8'
   // 'http://media.laybackzzz.com/test/winnie/hls/master.m3u8'
-  'http://media.laybackzzz.com/HLS/tt22022452/H264/master.m3u8'
+  'http://media.laybackzzz.com/HLS/tt2510028/H264/master.m3u8'
 const CONTROLS_TIMEOUT = 3200
+
+/**
+ * 外挂 PGS 字幕：远端在与 master 同级的 `pgs-subs/` 下放一份 index.json 清单。
+ * 目录没有索引（autoindex），因此只能按约定路径直取该文件，不能去「列举目录」。
+ */
+const PGS_INDEX_PATH = 'pgs-subs/index.json'
+/** PGS 轨在 Redux 中的取值前缀，用于与 HLS 内嵌字幕区分 */
+const PGS_KEY_PREFIX = 'pgs:'
 
 /** Stats for nerds 是调试能力，仅在开发环境提供，生产构建下彻底不出现 */
 const STATS_FOR_NERDS_ENABLED = import.meta.env.DEV
@@ -301,6 +313,62 @@ function toMediaTrackOptions(tracks: MediaPlaylistLike[], fallbackPrefix: string
   })
 }
 
+/** `pgs-subs/index.json` 的条目结构 */
+interface PgsIndexEntry {
+  lang?: string
+  name?: string
+  file: string
+}
+
+/** PGS 语言标识 → 中文名 */
+const PGS_LANG_LABELS: Record<string, string> = {
+  chs: '简体中文',
+  chi: '中文',
+  zho: '中文',
+  zh: '中文',
+  cht: '繁体中文',
+  eng: '英文',
+  en: '英文',
+  jpn: '日文',
+  jp: '日文',
+  kor: '韩文',
+  ko: '韩文',
+}
+
+/**
+ * 推导 PGS 轨的展示名：该源 index.json 的 `lang` 一律是 `und`，
+ * 真实语种藏在文件名末段（如 `.chs&eng`），因此优先翻译后缀，识别不出再退回原名。
+ */
+function pgsTrackLabel(entry: PgsIndexEntry): string {
+  for (const candidate of [entry.name, entry.file]) {
+    if (!candidate) continue
+    const tokens = candidate.toLowerCase().split('.').pop()?.split('&') ?? []
+    const labels = tokens.map((token) => PGS_LANG_LABELS[token]).filter((label): label is string => Boolean(label))
+    if (labels.length > 0) return `${labels.join(' + ')}（PGS）`
+  }
+  return `${entry.name || entry.file}（PGS）`
+}
+
+/** 把清单转成字幕选项：key 带前缀以便与 HLS 内嵌轨区分，url 相对清单地址解析 */
+function toPgsTrackOptions(data: unknown, indexUrl: string): MediaTrackOption[] {
+  if (!Array.isArray(data)) return []
+  return data.flatMap((raw, index) => {
+    if (typeof raw !== 'object' || raw === null) return []
+    const entry = raw as PgsIndexEntry
+    if (typeof entry.file !== 'string' || entry.file.length === 0) return []
+    return [
+      {
+        key: `${PGS_KEY_PREFIX}${entry.file}`,
+        label: pgsTrackLabel(entry),
+        index,
+        isDefault: false,
+        // `file` 相对清单目录：直接交给渲染器会按页面 origin 解析而 404
+        url: new URL(entry.file, indexUrl).href,
+      },
+    ]
+  })
+}
+
 /** 原生 HLS 的音轨接口（仅 Safari 实现），用于降级路径 */
 interface NativeAudioTrack {
   enabled: boolean
@@ -405,6 +473,8 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
   const adVideoRef = useRef<HTMLVideoElement>(null)
+  /** 外挂 PGS 字幕的绘制层，交由 libpgs 写入 */
+  const pgsCanvasRef = useRef<HTMLCanvasElement>(null)
   const hlsRef = useRef<Hls | null>(null)
   /** 最近一次分片请求命中的 Cloudflare 接入机房三字码 */
   const edgeColoRef = useRef<string | null>(null)
@@ -463,6 +533,9 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
   playerRef.current = player
   progressRef.current = progress
   qualityRef.current = player.quality
+
+  /** 当前选中的外挂 PGS 轨；未选中时为 undefined */
+  const activePgsTrack = player.pgsTracks.find((item) => item.key === player.subtitle)
 
   const episodes = useMemo(() => title.seasons.flatMap((season) => season.episodes), [title])
   const episodeIndex = episode ? episodes.findIndex((item) => item.id === episode.id) : -1
@@ -637,11 +710,24 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
     }
   }, [dispatch])
 
+  /* 外挂 PGS 清单：约定与 master 同级，该片源没有 PGS 时不返回清单，属正常情况 */
+  useEffect(() => {
+    const indexUrl = new URL(PGS_INDEX_PATH, SOURCE_URL).href
+    const controller = new AbortController()
+    fetch(indexUrl, { signal: controller.signal })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((data) => dispatch(setPgsTracks(toPgsTrackOptions(data, indexUrl))))
+      .catch(() => undefined)
+    return () => controller.abort()
+  }, [dispatch])
+
   /* 音轨 / 字幕选择下发到播放内核 */
   useEffect(() => {
     const hls = hlsRef.current
+    // PGS 是外挂字幕，由 libpgs 单独渲染，此时必须关掉内嵌字幕以免两套叠加
+    const externalPgsSelected = player.pgsTracks.some((item) => item.key === player.subtitle)
     if (hls) {
-      if (player.subtitle === SUBTITLE_OFF) {
+      if (player.subtitle === SUBTITLE_OFF || externalPgsSelected) {
         hls.subtitleDisplay = false
         hls.subtitleTrack = -1
       } else {
@@ -673,19 +759,44 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
         track.enabled = index === activeAudio.index
       })
     }
-  }, [player.subtitle, player.audio, player.subtitleTracks, player.audioTracks])
+  }, [player.subtitle, player.audio, player.subtitleTracks, player.audioTracks, player.pgsTracks])
+
+  /* 外挂 PGS 字幕：选中清单中的轨道后，交给 libpgs 渲染到独立的 canvas 层 */
+  useEffect(() => {
+    const video = videoRef.current
+    const canvas = pgsCanvasRef.current
+    if (!video || !canvas || !activePgsTrack?.url) return
+
+    const renderer = new PgsRenderer({
+      workerUrl: pgsWorkerUrl,
+      video,
+      canvas,
+      // 与 video 的 object-contain 保持一致，否则字幕会相对黑边错位
+      aspectRatio: 'contain',
+      subUrl: activePgsTrack.url,
+    })
+    void renderer.ready.catch((error) => {
+      console.error('[pgs] 字幕加载失败', activePgsTrack.url, error)
+    })
+    return () => renderer.dispose()
+  }, [activePgsTrack])
 
   /* 轨道列表变化后校正选择：字幕失效则关闭，音轨失效则回退到源默认轨 */
   useEffect(() => {
-    const { subtitleTracks, audioTracks, subtitle, audio } = playerRef.current
-    if (subtitleTracks.length > 0 && subtitle !== SUBTITLE_OFF && !subtitleTracks.some((item) => item.key === subtitle)) {
+    const { subtitleTracks, pgsTracks, audioTracks, subtitle, audio } = playerRef.current
+    const allSubtitleTracks = [...subtitleTracks, ...pgsTracks]
+    if (
+      allSubtitleTracks.length > 0 &&
+      subtitle !== SUBTITLE_OFF &&
+      !allSubtitleTracks.some((item) => item.key === subtitle)
+    ) {
       dispatch(setSubtitle(SUBTITLE_OFF))
     }
     if (audioTracks.length > 0 && !audioTracks.some((item) => item.key === audio)) {
       const fallback = audioTracks.find((item) => item.isDefault) ?? audioTracks[0]
       if (fallback) dispatch(setAudio(fallback.key))
     }
-  }, [dispatch, player.subtitle, player.audio, player.subtitleTracks, player.audioTracks])
+  }, [dispatch, player.subtitle, player.audio, player.subtitleTracks, player.audioTracks, player.pgsTracks])
 
   /* 音量 / 静音 / 倍速下发到播放内核 */
   useEffect(() => {
@@ -1093,7 +1204,9 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
   const episodeLabel = episode ? `第 ${episode.season} 季 第 ${episode.number} 集 · ${episode.title}` : null
   const autoSuffix =
     player.quality === 'auto' && liveHeight ? `（当前 ${heightLabel(liveHeight)}）` : ''
-  const subtitleLabel = player.subtitleTracks.find((track) => track.key === player.subtitle)?.label
+  const subtitleLabel = [...player.subtitleTracks, ...player.pgsTracks].find(
+    (track) => track.key === player.subtitle,
+  )?.label
   const audioLabel = player.audioTracks.find((track) => track.key === player.audio)?.label
 
   return (
@@ -1110,11 +1223,25 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
         playsInline
       />
 
+      {/*
+        外挂 PGS 字幕层：严格与 video 同框，并由 libpgs 按 contain 计算黑边偏移。
+        必须 pointer-events-none，否则会挡住下方 z-60 的点击切换播放热区。
+        key 绑定轨道：libpgs 在自定义 canvas 上只卸载监听、不清理画面，
+        换轨或关闭时靠重建节点丢弃上一帧，避免残留字幕。
+      */}
+      {activePgsTrack ? (
+        <canvas
+          key={activePgsTrack.key}
+          ref={pgsCanvasRef}
+          className="pointer-events-none absolute inset-0 z-10 h-full w-full object-contain"
+        />
+      ) : null}
+
       {/* 点击画面切换播放状态 */}
       <button
         type="button"
         aria-label={player.isPlaying ? '暂停' : '播放'}
-        className="absolute inset-0 z-0 cursor-default"
+        className="absolute inset-0 z-60 cursor-default"
         onClick={() => {
           togglePlayback()
           wake()
@@ -1126,7 +1253,7 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
         ref={adVideoRef}
         src={AD_SOURCE}
         className={cn(
-          'absolute inset-0 z-50 h-full w-full bg-black object-contain',
+          'absolute inset-0 z-100 h-full w-full bg-black object-contain',
           adActive ? 'block' : 'hidden',
         )}
         playsInline
@@ -1135,7 +1262,7 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
 
       {/* 广告时段 UI：角标、进度与 5s 后出现的跳过按钮 */}
       {adActive ? (
-        <div className="absolute inset-0 z-50">
+        <div className="absolute inset-0 z-100">
           <div className="pointer-events-none absolute inset-x-0 top-0 flex items-center gap-2 bg-gradient-to-b from-black/70 to-transparent p-4 md:p-6">
             <span className="rounded bg-brand px-2 py-0.5 text-[11px] font-semibold text-white">广告</span>
             <span className="text-xs text-white/70">赞助内容</span>
@@ -1168,7 +1295,7 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
 
       {/* 缓冲指示 */}
       {player.buffering && player.isPlaying && !player.ended ? (
-        <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center">
+        <div className="pointer-events-none absolute inset-0 z-70 flex items-center justify-center">
           <span
             role="status"
             aria-label="缓冲中"
@@ -1180,7 +1307,7 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
       {/* 顶部信息栏 */}
       <div
         className={cn(
-          'absolute inset-x-0 top-0 z-30 flex items-center gap-3 bg-gradient-to-b from-black/85 to-transparent p-4 transition-opacity duration-300 md:p-6',
+          'absolute inset-x-0 top-0 z-80 flex items-center gap-3 bg-gradient-to-b from-black/85 to-transparent p-4 transition-opacity duration-300 md:p-6',
           player.controlsVisible ? 'opacity-100' : 'pointer-events-none opacity-0',
         )}
       >
@@ -1210,7 +1337,7 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
 
       {/* 播放结束遮罩 */}
       {player.ended ? (
-        <div className="absolute inset-0 z-40 flex flex-col items-center justify-center gap-4 bg-black/85">
+        <div className="absolute inset-0 z-90 flex flex-col items-center justify-center gap-4 bg-black/85">
           <p className="text-lg font-semibold">{nextEpisode ? '下一集即将播放' : '已播放完毕'}</p>
           {nextEpisode ? (
             <p className="text-sm text-white/60">{`第 ${nextEpisode.season} 季 第 ${nextEpisode.number} 集 · ${nextEpisode.title}`}</p>
@@ -1239,7 +1366,7 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
 
       {/* Stats for nerds：类似 YouTube 的实时播放诊断浮层（仅开发环境） */}
       {STATS_FOR_NERDS_ENABLED && statsVisible ? (
-        <section className="absolute left-4 top-4 z-40 max-w-[min(760px,calc(100vw-2rem))] rounded-2xl bg-[rgba(33,33,33,0.82)] px-5 py-4 text-[15px] leading-7 shadow-[0_18px_60px_rgba(0,0,0,0.45)] backdrop-blur md:left-6 md:top-6">
+        <section className="absolute left-4 top-4 z-90 max-w-[min(760px,calc(100vw-2rem))] rounded-2xl bg-[rgba(33,33,33,0.82)] px-5 py-4 text-[15px] leading-7 shadow-[0_18px_60px_rgba(0,0,0,0.45)] backdrop-blur md:left-6 md:top-6">
           <button
             type="button"
             aria-label="关闭播放统计"
@@ -1286,7 +1413,7 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
       {/* 底部控制栏 */}
       <div
         className={cn(
-          'absolute inset-x-0 bottom-0 z-30 flex flex-col gap-2 bg-gradient-to-t from-black/90 via-black/70 to-transparent px-4 pb-5 pt-16 transition-opacity duration-300 md:px-6',
+          'absolute inset-x-0 bottom-0 z-80 flex flex-col gap-2 bg-gradient-to-t from-black/90 via-black/70 to-transparent px-4 pb-5 pt-16 transition-opacity duration-300 md:px-6',
           player.controlsVisible ? 'opacity-100' : 'pointer-events-none opacity-0',
         )}
       >
@@ -1454,8 +1581,17 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
                       {track.label}
                     </DropdownMenuRadioItem>
                   ))}
+                  {player.pgsTracks.length > 0 ? <DropdownMenuSeparator className="bg-white/10" /> : null}
+                  {player.pgsTracks.length > 0 ? (
+                    <DropdownMenuLabel className="text-xs text-white/45">外挂字幕（PGS）</DropdownMenuLabel>
+                  ) : null}
+                  {player.pgsTracks.map((track) => (
+                    <DropdownMenuRadioItem key={track.key} value={track.key} className="cursor-pointer">
+                      {track.label}
+                    </DropdownMenuRadioItem>
+                  ))}
                 </DropdownMenuRadioGroup>
-                {player.subtitleTracks.length === 0 ? (
+                {player.subtitleTracks.length === 0 && player.pgsTracks.length === 0 ? (
                   <DropdownMenuItem disabled className="text-xs text-white/40">
                     正在读取字幕信息…
                   </DropdownMenuItem>
@@ -1555,7 +1691,7 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
 
       {/* 选集面板 */}
       {episodesOpen && title.seasons.length ? (
-        <aside className="absolute inset-y-0 right-0 z-40 flex w-full max-w-[360px] flex-col border-l border-white/10 bg-[#141414]/95 backdrop-blur">
+        <aside className="absolute inset-y-0 right-0 z-90 flex w-full max-w-[360px] flex-col border-l border-white/10 bg-[#141414]/95 backdrop-blur">
           <div className="flex h-14 shrink-0 items-center gap-3 border-b border-white/10 px-4">
             <p className="text-sm font-semibold">选集</p>
             <Button
@@ -1598,7 +1734,7 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
       {/* 播放器专属右键菜单，目前只承载 Stats for nerds，因此同样仅开发环境构建 */}
       {STATS_FOR_NERDS_ENABLED && contextMenu ? (
         <div
-          className="absolute z-50 min-w-48 rounded-xl border border-white/10 bg-[#1b1b1b]/95 p-1.5 shadow-[0_14px_40px_rgba(0,0,0,0.45)] backdrop-blur"
+          className="absolute z-100 min-w-48 rounded-xl border border-white/10 bg-[#1b1b1b]/95 p-1.5 shadow-[0_14px_40px_rgba(0,0,0,0.45)] backdrop-blur"
           style={{ left: contextMenu.x, top: contextMenu.y }}
           onPointerDown={(event) => event.stopPropagation()}
         >

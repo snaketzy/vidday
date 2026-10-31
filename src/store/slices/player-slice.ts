@@ -23,6 +23,8 @@ export interface MediaTrackOption {
   index: number
   /** 是否为视频源的默认轨道 */
   isDefault: boolean
+  /** 外部字幕（PGS）的绝对地址；HLS 内嵌轨道无此项 */
+  url?: string
 }
 
 export interface PlayerState {
@@ -42,6 +44,8 @@ export interface PlayerState {
   subtitleTracks: MediaTrackOption[]
   /** 由播放内核回写：当前视频源的真实音轨 */
   audioTracks: MediaTrackOption[]
+  /** 外挂 PGS 字幕轨：不在 HLS 内嵌字幕组里，由独立的 index.json 清单提供 */
+  pgsTracks: MediaTrackOption[]
   rate: number
   controlsVisible: boolean
   fullscreen: boolean
@@ -64,6 +68,7 @@ export const initialState: PlayerState = {
   audio: '',
   subtitleTracks: [],
   audioTracks: [],
+  pgsTracks: [],
   rate: 1,
   controlsVisible: true,
   fullscreen: false,
@@ -149,6 +154,10 @@ const playerSlice = createSlice({
     setSubtitle(state, action: PayloadAction<SubtitleTrack>) {
       state.subtitle = action.payload
     },
+    /** 由播放内核回写：外挂 PGS 字幕清单 */
+    setPgsTracks(state, action: PayloadAction<MediaTrackOption[]>) {
+      state.pgsTracks = action.payload
+    },
     setAudio(state, action: PayloadAction<AudioTrack>) {
       state.audio = action.payload
     },
@@ -192,6 +201,7 @@ export const {
   toggleMute,
   setQuality,
   setSubtitle,
+  setPgsTracks,
   setAudio,
   setMediaTracks,
   setRate,

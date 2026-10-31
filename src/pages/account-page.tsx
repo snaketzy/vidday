@@ -51,10 +51,14 @@ export function AccountPage() {
 
   if (!account) return null
 
-  // 字幕 / 音轨选项来自视频源的真实轨道，仅在打开过播放页后才可用
+  // 字幕 / 音轨选项来自视频源的真实轨道：内嵌字幕、外挂 PGS 与真实音轨，
+  // 仅在打开过播放页后才可用
   const subtitleOptions = [
     { value: SUBTITLE_OFF, label: '关闭' },
-    ...player.subtitleTracks.map((track) => ({ value: track.key, label: track.label })),
+    ...[...player.subtitleTracks, ...player.pgsTracks].map((track) => ({
+      value: track.key,
+      label: track.label,
+    })),
   ]
   const audioOptions = player.audioTracks.map((track) => ({ value: track.key, label: track.label }))
 
