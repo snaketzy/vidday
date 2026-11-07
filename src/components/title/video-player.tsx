@@ -1,4 +1,4 @@
-import Hls from 'hls.js'
+import Hls, { ErrorDetails } from 'hls.js'
 import { PgsRenderer } from 'libpgs'
 // worker 必须交给打包器产出真实地址：照 README 写 './node_modules/...' 在 Vite 下会 404
 import pgsWorkerUrl from 'libpgs/dist/libpgs.worker.js?url'
@@ -81,7 +81,8 @@ const SOURCE_URL =
   // import.meta.env.VITE_SOURCE_URL ||
   // 'https://customer-juxwzlg9p7suy0ju.cloudflarestream.com/66d514fd69385d3e701c8c9b96ff107b/manifest/video.m3u8'
   // 'http://media.laybackzzz.com/test/winnie/hls/master.m3u8'
-  'http://media.laybackzzz.com/HLS/tt2510028/H264/master.m3u8'
+  // 'http://media.laybackzzz.com/HLS/tt0443632/H264/master.m3u8'
+  'http://media.laybackzzz.com/HLS/tt0104257/HEVC/master.m3u8'
 const CONTROLS_TIMEOUT = 3200
 
 /**
@@ -91,6 +92,12 @@ const CONTROLS_TIMEOUT = 3200
 const PGS_INDEX_PATH = 'pgs-subs/index.json'
 /** PGS 轨在 Redux 中的取值前缀，用于与 HLS 内嵌字幕区分 */
 const PGS_KEY_PREFIX = 'pgs:'
+
+/**
+ * manifest 拉取失败后的重试上限。
+ * hls.js 只在内部重试到耗尽，之后必须由调用方重新 loadSource 才会再拉一次。
+ */
+const MANIFEST_RETRY_LIMIT = 3
 
 /** Stats for nerds 是调试能力，仅在开发环境提供，生产构建下彻底不出现 */
 const STATS_FOR_NERDS_ENABLED = import.meta.env.DEV
@@ -104,6 +111,30 @@ const AD_SOURCE = '/ads/ad-sample.mp4'
 const AD_INTERVAL = 60
 /** 广告可跳过前的强制观看时长（秒） */
 const AD_SKIP_AFTER = 5
+
+// #region debug-point:report-helper
+/* 临时埋点上报：指向本地 Debug Server（session=hls-stutter-latency），验证完即删 */
+const DEBUG_ENDPOINT = 'http://127.0.0.1:7779/event'
+const DEBUG_SESSION_ID = 'hls-stutter-latency'
+const dbgReport = (hypothesisId: string, location: string, msg: string, data?: Record<string, unknown>) => {
+  try {
+    fetch(DEBUG_ENDPOINT, {
+      method: 'POST',
+      body: JSON.stringify({
+        sessionId: DEBUG_SESSION_ID,
+        runId: 'pre',
+        hypothesisId,
+        location,
+        msg,
+        data: data ?? {},
+        ts: Date.now(),
+      }),
+    }).catch(() => {})
+  } catch {
+    /* 网络失败不干扰播放 */
+  }
+}
+// #endregion
 
 const controlClass = 'text-white hover:bg-white/15 focus-visible:ring-white/40'
 const menuClass = 'border-white/10 bg-[#181818] text-white'
@@ -596,6 +627,7 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
     hlsRef.current = hls
     hls.loadSource(SOURCE_URL)
     hls.attachMedia(video)
+    let manifestRetries = 0
 
     /* 从播放内核读取当前视频源的真实轨道，回写到状态供下拉渲染 */
     const publishTracks = () => {
@@ -608,6 +640,7 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
     }
 
     hls.on(Hls.Events.MANIFEST_PARSED, () => {
+      manifestRetries = 0
       const list = toQualityLevels(hls.levels)
       setLevels(list)
       dispatch(setQuality(pickQuality(list, qualityRef.current)))
@@ -647,14 +680,109 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
       while (samples.length > 0 && samples[0].at < cutoff) samples.shift()
     }
     hls.on(Hls.Events.FRAG_LOADED, recordFragLoad)
+
+    // #region debug-point A:frag-timing
+    /* 每个分片的 TTFB / 下载耗时 / 实际吞吐，用于验证「国际链路慢」假设 */
+    const dbgFragTiming = (_event: unknown, data: { frag?: { url?: string; level?: number; stats?: { loading?: { start?: number; first?: number; end?: number }; loaded?: number; total?: number } }; networkDetails?: NetworkDetailsLike }) => {
+      const load = data?.frag?.stats?.loading
+      if (!load) return
+      const bytes = data?.frag?.stats?.loaded || data?.frag?.stats?.total || 0
+      const start = load.start ?? 0
+      const first = load.first ?? 0
+      const end = load.end ?? 0
+      const ttfbMs = first && start ? Math.round(first - start) : null
+      const downloadMs = end && start ? Math.round(end - start) : null
+      const throughputBps = downloadMs && bytes ? Math.round((bytes * 8) / (downloadMs / 1000)) : null
+      const video = videoRef.current
+      const level = data?.frag?.level ?? -1
+      const levelInfo = level >= 0 ? hls.levels[level] : undefined
+      dbgReport('A', 'video-player.tsx:FRAG_LOADED', '[DEBUG] frag network timing', {
+        frag: data?.frag?.url?.split('/').slice(-2).join('/') ?? null,
+        fragLevel: level,
+        bytes,
+        ttfbMs,
+        downloadMs,
+        throughputBps,
+        levelBitrateBps: levelInfo?.bitrate ?? null,
+        bandwidthEstimateBps: hls.bandwidthEstimate,
+        bufferHealthS: video ? Number(bufferedWindow(video).health.toFixed(2)) : null,
+        currentTime: video ? Number(video.currentTime.toFixed(2)) : null,
+        colo: edgeColoFromResponse(data?.networkDetails ?? null),
+      })
+    }
+    hls.on(Hls.Events.FRAG_LOADED, dbgFragTiming)
+    // #endregion
+
+    // #region debug-point C:stall-events
+    /* 真实卡顿事件：waiting/stalled 与当时缓冲水位、网络状态 */
+    const dbgStall = (kind: string) => () => {
+      const v = videoRef.current
+      dbgReport('C', `video-player.tsx:video:${kind}`, `[DEBUG] video ${kind}`, {
+        currentTime: v ? Number(v.currentTime.toFixed(2)) : null,
+        bufferHealthS: v ? Number(bufferedWindow(v).health.toFixed(2)) : null,
+        readyState: v?.readyState ?? null,
+        networkState: v?.networkState ?? null,
+        buffering: playerRef.current.buffering,
+        currentLevel: hls.currentLevel,
+        bandwidthEstimateBps: hls.bandwidthEstimate,
+      })
+    }
+    const onWaiting = dbgStall('waiting')
+    const onStalled = dbgStall('stalled')
+    const onPlaying = dbgStall('playing')
+    video.addEventListener('waiting', onWaiting)
+    video.addEventListener('stalled', onStalled)
+    video.addEventListener('playing', onPlaying)
+    // #endregion
     hls.on(Hls.Events.ERROR, (_event, data) => {
+      // #region debug-point A:error
+      dbgReport('A', 'video-player.tsx:ERROR', `[DEBUG] hls ${data.fatal ? 'fatal' : 'non-fatal'} ${data.type}/${data.details}`, {
+        type: data.type,
+        details: data.details,
+        fatal: data.fatal,
+        reason: typeof data.reason === 'string' ? data.reason : null,
+        url: (data as { url?: string }).url ?? null,
+        currentTime: videoRef.current ? Number(videoRef.current.currentTime.toFixed(2)) : null,
+      })
+      // #endregion
+      // 原本这里把 hls.js 的死因全吞了，出问题只能看到「黑屏」看不出为什么，开发期留痕
+      if (import.meta.env.DEV) {
+        console.error(
+          `[hls] ${data.fatal ? 'fatal' : 'non-fatal'} ${data.type} / ${data.details}`,
+          data.reason ?? data.response ?? data.url ?? '',
+        )
+      }
       if (!data.fatal) return
-      if (data.type === Hls.ErrorTypes.NETWORK_ERROR) hls.startLoad()
-      else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) hls.recoverMediaError()
-      else hls.destroy()
+
+      if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+        // manifest 阶段失败时 levels 仍是空的，而 playListLoader.startLoad() 在 hls.js 里是空函数，
+        // 调 startLoad() 等于什么都不做，一次瞬时失败就会永久黑屏；只能重新 loadSource 再拉一次
+        const manifestFailed =
+          data.details === ErrorDetails.MANIFEST_LOAD_ERROR ||
+          data.details === ErrorDetails.MANIFEST_LOAD_TIMEOUT
+        if (manifestFailed && manifestRetries < MANIFEST_RETRY_LIMIT) {
+          manifestRetries += 1
+          hls.loadSource(SOURCE_URL)
+        } else {
+          hls.startLoad()
+        }
+        return
+      }
+
+      if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+        hls.recoverMediaError()
+        return
+      }
+
+      hls.destroy()
     })
 
     return () => {
+      // #region debug-point C:stall-events
+      video.removeEventListener('waiting', onWaiting)
+      video.removeEventListener('stalled', onStalled)
+      video.removeEventListener('playing', onPlaying)
+      // #endregion
       hls.destroy()
       hlsRef.current = null
     }
@@ -1142,6 +1270,42 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
     const timer = window.setInterval(refreshNerdStats, 1000)
     return () => window.clearInterval(timer)
   }, [refreshNerdStats, statsVisible])
+
+  // #region debug-point B:buffer-sampler
+  /* 1s 采样：缓冲水位(B) / 掉帧增量(D) / 估计带宽 vs 实际 5s 吞吐(E) */
+  useEffect(() => {
+    let prevDropped = 0
+    const timer = window.setInterval(() => {
+      const video = videoRef.current
+      const hls = hlsRef.current
+      if (!video || !hls || video.paused || video.ended) return
+      const samples = fragSamplesRef.current
+      const cutoff = performance.now() - NETWORK_WINDOW_MS
+      const bytes5s = samples.filter((s) => s.at >= cutoff).reduce((sum, s) => sum + s.bytes, 0)
+      const level = hls.currentLevel >= 0 ? hls.levels[hls.currentLevel] : undefined
+      const levelBitrate = level?.averageBitrate ?? level?.bitrate ?? 0
+      const frames = readPlaybackFrames(video)
+      const droppedDelta = frames.dropped - prevDropped
+      prevDropped = frames.dropped
+      dbgReport('B', 'video-player.tsx:sampler', '[DEBUG] 1s sample', {
+        currentTime: Number(video.currentTime.toFixed(2)),
+        bufferHealthS: Number(bufferedWindow(video).health.toFixed(2)),
+        bandwidthEstimateBps: hls.bandwidthEstimate,
+        actualBytes5s: bytes5s,
+        actualBps5s: bytes5s ? Math.round((bytes5s * 8) / (NETWORK_WINDOW_MS / 1000)) : 0,
+        levelBitrateBps: levelBitrate,
+        levelIndex: hls.currentLevel,
+        droppedFramesDelta: droppedDelta,
+        droppedFramesTotal: frames.dropped,
+        readyState: video.readyState,
+        networkState: video.networkState,
+        buffering: playerRef.current.buffering,
+        playbackRate: video.playbackRate,
+      })
+    }, 1000)
+    return () => window.clearInterval(timer)
+  }, [])
+  // #endregion
 
   /* 快捷键 */
   useEffect(() => {
