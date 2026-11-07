@@ -132,7 +132,7 @@ const dbgReport = (hypothesisId: string, location: string, msg: string, data?: R
 // #endregion
 
 const controlClass = 'text-white hover:bg-white/15 focus-visible:ring-white/40'
-const menuClass = 'border-white/10 bg-[#181818] text-white'
+const menuClass = 'z-100 border-white/10 bg-[#181818] text-white'
 
 /** 由轨道高度推导展示名 */
 const heightLabel = (height: number) => (height >= 2160 ? '4K' : `${height}p`)
@@ -499,6 +499,7 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
   /** 播放源：优先取影片自身下发的 HLS 地址，缺失时回退到内置演示流 */
   const sourceUrl = title.playUrl || FALLBACK_SOURCE_URL
   const containerRef = useRef<HTMLDivElement>(null)
+  const [menuPortalContainer, setMenuPortalContainer] = useState<HTMLElement | null>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
   const adVideoRef = useRef<HTMLVideoElement>(null)
   /** 外挂 PGS 字幕的绘制层，交由 libpgs 写入 */
@@ -534,6 +535,10 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
   const [adSkippable, setAdSkippable] = useState(false)
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
   const [statsVisible, setStatsVisible] = useState(false)
+  const setContainerRef = useCallback((element: HTMLDivElement | null) => {
+    containerRef.current = element
+    setMenuPortalContainer(element)
+  }, [])
   const sourcePlaybackId = useMemo(
     () => sourceUrl.match(/cloudflarestream\.com\/([^/]+)\//)?.[1] ?? 'unknown',
     [sourceUrl],
@@ -1184,11 +1189,9 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
       // 广告时段不响应右键，与生产环境表现一致
       if (adActiveRef.current) return
       wake()
-      // 诊断入口只在开发环境弹出
-      if (!STATS_FOR_NERDS_ENABLED) return
       const rect = containerRef.current?.getBoundingClientRect()
       const menuWidth = 196
-      const menuHeight = 54
+      const menuHeight = STATS_FOR_NERDS_ENABLED ? 92 : 52
       const x = rect ? Math.min(event.clientX - rect.left, rect.width - menuWidth - 12) : event.clientX
       const y = rect ? Math.min(event.clientY - rect.top, rect.height - menuHeight - 12) : event.clientY
       setContextMenu({ x: Math.max(12, x), y: Math.max(12, y) })
@@ -1372,7 +1375,7 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
 
   return (
     <div
-      ref={containerRef}
+      ref={setContainerRef}
       className="relative h-screen w-screen select-none overflow-hidden bg-black text-white"
       onMouseMove={wake}
       onContextMenu={openContextMenu}
@@ -1465,10 +1468,12 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
         </div>
       ) : null}
 
+      <div aria-hidden="true" className="app-window-drag absolute inset-x-0 top-0 z-70 h-3" />
+
       {/* 顶部信息栏 */}
       <div
         className={cn(
-          'absolute inset-x-0 top-0 z-80 flex items-center gap-3 bg-gradient-to-b from-black/85 to-transparent p-4 transition-opacity duration-300 md:p-6',
+          'app-window-drag absolute inset-x-0 top-0 z-80 flex items-center gap-3 bg-gradient-to-b from-black/85 to-transparent p-4 transition-opacity duration-300 md:p-6',
           player.controlsVisible ? 'opacity-100' : 'pointer-events-none opacity-0',
         )}
       >
@@ -1476,7 +1481,7 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
           size="icon"
           variant="ghost"
           aria-label="返回"
-          className={controlClass}
+          className={cn(controlClass, 'app-window-no-drag')}
           onClick={() => navigate(-1)}
         >
           <ArrowLeft className="size-5" />
@@ -1489,7 +1494,7 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
           size="icon"
           variant="ghost"
           aria-label="返回作品详情"
-          className={cn(controlClass, 'ml-auto')}
+          className={cn(controlClass, 'app-window-no-drag ml-auto')}
           onClick={() => navigate(`/title/${title.id}`)}
         >
           <X className="size-5" />
@@ -1701,7 +1706,11 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
                   <span className="hidden sm:inline">{player.rate}x</span>
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className={menuClass}>
+              <DropdownMenuContent
+                align="end"
+                className={menuClass}
+                portalContainer={menuPortalContainer}
+              >
                 <DropdownMenuLabel className="text-xs text-white/45">播放速度</DropdownMenuLabel>
                 <DropdownMenuRadioGroup
                   value={String(player.rate)}
@@ -1727,7 +1736,11 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
                   {subtitleLabel ? <span className="hidden text-xs sm:inline">{subtitleLabel}</span> : null}
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className={menuClass}>
+              <DropdownMenuContent
+                align="end"
+                className={menuClass}
+                portalContainer={menuPortalContainer}
+              >
                 <DropdownMenuLabel className="text-xs text-white/45">字幕</DropdownMenuLabel>
                 <DropdownMenuRadioGroup
                   value={player.subtitle}
@@ -1771,7 +1784,11 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
                   {audioLabel ? <span className="hidden text-xs lg:inline">{audioLabel}</span> : null}
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className={menuClass}>
+              <DropdownMenuContent
+                align="end"
+                className={menuClass}
+                portalContainer={menuPortalContainer}
+              >
                 <DropdownMenuLabel className="text-xs text-white/45">音轨</DropdownMenuLabel>
                 <DropdownMenuRadioGroup
                   value={player.audio}
@@ -1798,7 +1815,11 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
                   <Settings className="size-5" />
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className={cn(menuClass, 'w-52')}>
+              <DropdownMenuContent
+                align="end"
+                className={cn(menuClass, 'w-52')}
+                portalContainer={menuPortalContainer}
+              >
                 <DropdownMenuLabel className="text-xs text-white/45">画质</DropdownMenuLabel>
                 <DropdownMenuRadioGroup
                   value={player.quality}
@@ -1892,8 +1913,8 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
         </aside>
       ) : null}
 
-      {/* 播放器专属右键菜单，目前只承载 Stats for nerds，因此同样仅开发环境构建 */}
-      {STATS_FOR_NERDS_ENABLED && contextMenu ? (
+      {/* 播放器右键菜单；刷新在所有环境可用，Stats for nerds 仅限开发环境 */}
+      {contextMenu ? (
         <div
           className="absolute z-100 min-w-48 rounded-xl border border-white/10 bg-[#1b1b1b]/95 p-1.5 shadow-[0_14px_40px_rgba(0,0,0,0.45)] backdrop-blur"
           style={{ left: contextMenu.x, top: contextMenu.y }}
@@ -1901,15 +1922,25 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
         >
           <button
             type="button"
-            className="flex w-full items-center rounded-lg px-3 py-2 text-left text-sm text-white transition hover:bg-white/10"
-            onClick={() => {
-              setStatsVisible((visible) => !visible)
-              setContextMenu(null)
-              wake()
-            }}
+            className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-white transition hover:bg-white/10"
+            onClick={() => window.location.reload()}
           >
-            {statsVisible ? 'Hide stats for nerds' : 'Stats for nerds'}
+            <RotateCw className="size-4" />
+            刷新
           </button>
+          {STATS_FOR_NERDS_ENABLED ? (
+            <button
+              type="button"
+              className="flex w-full items-center rounded-lg px-3 py-2 text-left text-sm text-white transition hover:bg-white/10"
+              onClick={() => {
+                setStatsVisible((visible) => !visible)
+                setContextMenu(null)
+                wake()
+              }}
+            >
+              {statsVisible ? 'Hide stats for nerds' : 'Stats for nerds'}
+            </button>
+          ) : null}
         </div>
       ) : null}
     </div>
