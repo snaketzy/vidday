@@ -49,8 +49,8 @@ export function ProfilesPage() {
 
   return (
     <div className="flex min-h-screen flex-col bg-background">
-      <header className="flex h-[68px] items-center px-4 md:px-12">
-        <BrandLogo />
+      <header className="app-window-drag flex h-[68px] items-center px-4 md:px-12">
+        <BrandLogo className="app-window-no-drag" />
       </header>
 
       <main className="flex flex-1 flex-col items-center justify-center px-4 py-12">

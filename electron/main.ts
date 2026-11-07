@@ -1,4 +1,4 @@
-import { app, BrowserWindow, net, protocol, session, shell } from 'electron'
+import { app, BrowserWindow, net, protocol, screen, session, shell } from 'electron'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -60,11 +60,17 @@ function registerAppProtocol(): void {
 }
 
 async function createWindow(): Promise<void> {
+  const { x, y, width: workAreaWidth, height: workAreaHeight } = screen.getPrimaryDisplay().workArea
+  const windowWidth = Math.min(1440, workAreaWidth)
+  const windowHeight = Math.min(Math.round(workAreaHeight * 0.8), workAreaHeight)
+
   mainWindow = new BrowserWindow({
-    width: 1440,
-    height: 900,
-    minWidth: 1024,
-    minHeight: 640,
+    width: windowWidth,
+    height: windowHeight,
+    x: Math.round(x + (workAreaWidth - windowWidth) / 2),
+    y: Math.round(y + (workAreaHeight - windowHeight) / 2),
+    minWidth: Math.min(1024, windowWidth),
+    minHeight: Math.min(640, windowHeight),
     show: false,
     backgroundColor: '#141414',
     titleBarStyle: 'hiddenInset',

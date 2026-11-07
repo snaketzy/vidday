@@ -51,8 +51,8 @@ export function LoginPage() {
       />
       <div className="absolute inset-0 bg-gradient-to-b from-black/85 via-black/70 to-black/90" />
 
-      <header className="relative z-10 px-4 py-6 md:px-12">
-        <BrandLogo size="lg" />
+      <header className="app-window-drag relative z-10 px-4 py-6 md:px-12">
+        <BrandLogo size="lg" className="app-window-no-drag" />
       </header>
 
       <main className="relative z-10 flex flex-1 items-center justify-center px-4 pb-16">

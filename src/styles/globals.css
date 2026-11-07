@@ -166,6 +166,16 @@
   }
 }
 
+@layer utilities {
+  .app-window-drag {
+    -webkit-app-region: drag;
+  }
+
+  .app-window-no-drag {
+    -webkit-app-region: no-drag;
+  }
+}
+
 /* 横向片单滚动条——极细、仅在深色背景上可见 */
 @utility row-scrollbar {
   scrollbar-width: thin;

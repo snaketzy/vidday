@@ -73,11 +73,11 @@ export function AccountPage() {
 
   return (
     <div className="min-h-screen bg-background pb-16">
-      <header className="flex h-[68px] items-center px-4 md:px-12">
-        <BrandLogo />
+      <header className="app-window-drag flex h-[68px] items-center px-4 md:px-12">
+        <BrandLogo className="app-window-no-drag" />
         <Button
           variant="ghost"
-          className="ml-auto text-sm text-white/60 hover:bg-white/10 hover:text-white"
+          className="app-window-no-drag ml-auto text-sm text-white/60 hover:bg-white/10 hover:text-white"
           onClick={() => navigate('/')}
         >
           返回首页

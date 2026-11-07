@@ -83,7 +83,7 @@ export function SiteHeader() {
   return (
     <header
       className={cn(
-        'fixed inset-x-0 top-0 z-40 transition-colors duration-300',
+        'app-window-drag fixed inset-x-0 top-0 z-40 transition-colors duration-300',
         scrolled || searchOpen
           ? 'border-b border-white/5 bg-background/95 backdrop-blur'
           : 'bg-gradient-to-b from-black/85 via-black/40 to-transparent',
@@ -92,7 +92,12 @@ export function SiteHeader() {
       <div className="flex h-[68px] items-center gap-3 px-4 md:gap-6 md:px-12">
         <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
           <SheetTrigger asChild>
-            <Button variant="ghost" size="icon" className="text-white md:hidden" aria-label="打开导航">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="app-window-no-drag text-white md:hidden"
+              aria-label="打开导航"
+            >
               <Menu className="size-5" />
             </Button>
           </SheetTrigger>
@@ -127,9 +132,9 @@ export function SiteHeader() {
           </SheetContent>
         </Sheet>
 
-        <BrandLogo className="mr-2" />
+        <BrandLogo className="app-window-no-drag mr-2" />
 
-        <nav className="hidden items-center gap-5 md:flex">
+        <nav className="app-window-no-drag hidden items-center gap-5 md:flex">
           {NAV_ITEMS.map((item) => {
             const [path, query] = item.to.split('?')
             const params = new URLSearchParams(query ?? '')
@@ -167,7 +172,7 @@ export function SiteHeader() {
           </DropdownMenu>
         </nav>
 
-        <div className="ml-auto flex items-center gap-1 md:gap-3">
+        <div className="app-window-no-drag ml-auto flex items-center gap-1 md:gap-3">
           <div className="flex items-center">
             <Button
               variant="ghost"
