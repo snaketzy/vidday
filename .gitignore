@@ -1,11 +1,19 @@
 node_modules
 dist
 dist-ssr
+electron/dist
+release
 *.local
 .DS_Store
 .env
 .env.*
 !.env.example
+
+# 本地线路配置含订阅 token，不入库
+resources/lines.json
+
+# mihomo 内核为运行时二进制（约 54MB），不入库，按需下载到 resources/mihomo/
+resources/mihomo/mihomo
 
 # Editor
 .vscode/*

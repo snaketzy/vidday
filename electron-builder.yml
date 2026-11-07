@@ -1,0 +1,33 @@
+appId: com.vidday.desktop
+productName: Vidday
+
+directories:
+  output: release
+  buildResources: build
+
+files:
+  - dist/**
+  - electron/dist/**
+  - package.json
+
+# 内置代理内核与定制线路随包分发到 Contents/Resources/
+extraResources:
+  - from: resources
+    to: .
+    filter:
+      - '**/*'
+      - '!**/.gitkeep'
+
+mac:
+  category: public.app-category.entertainment
+  target:
+    - target: dmg
+      arch:
+        - arm64
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+
+dmg:
+  title: ${productName}

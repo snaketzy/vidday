@@ -1,0 +1,4 @@
+{
+  "subscriptionUrl": "https://example.com/api/v1/subscribe?token=YOUR_TOKEN",
+  "subscriptionInterval": 3600
+}
