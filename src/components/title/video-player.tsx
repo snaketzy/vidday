@@ -39,8 +39,8 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Slider } from '@/components/ui/slider'
-import { backdrop } from '@/lib/art'
 import { formatTime } from '@/lib/format'
+import { titleBackdrop } from '@/lib/title-art'
 import { useAppDispatch, useAppSelector } from '@/store/hooks'
 import {
   DEFAULT_QUALITY,
@@ -74,15 +74,10 @@ import { recordProgress } from '@/store/slices/watch-slice'
 import type { Episode, Title } from '@/types'
 
 /**
- * 播放源：Cloudflare Stream 多码率 HLS master playlist，
- * 轨道信息（音轨 / 字幕）在装载后从播放内核读取，不做写死。
+ * 回退播放源：影片未下发 `playUrl` 时使用的演示流，
+ * 用于在没有真实入库内容时验证播放器链路。
  */
-const SOURCE_URL =
-  // import.meta.env.VITE_SOURCE_URL ||
-  // 'https://customer-juxwzlg9p7suy0ju.cloudflarestream.com/66d514fd69385d3e701c8c9b96ff107b/manifest/video.m3u8'
-  // 'http://media.laybackzzz.com/test/winnie/hls/master.m3u8'
-  // 'http://media.laybackzzz.com/HLS/tt0443632/H264/master.m3u8'
-  'http://media.laybackzzz.com/HLS/tt0104257/HEVC/master.m3u8'
+const FALLBACK_SOURCE_URL = 'http://media.laybackzzz.com/HLS/tt0104257/HEVC/master.m3u8'
 const CONTROLS_TIMEOUT = 3200
 
 /**
@@ -501,6 +496,8 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
   const navigate = useNavigate()
   const player = useAppSelector(selectPlayer)
   const progress = useAppSelector((state) => state.watch.progress)
+  /** 播放源：优先取影片自身下发的 HLS 地址，缺失时回退到内置演示流 */
+  const sourceUrl = title.playUrl || FALLBACK_SOURCE_URL
   const containerRef = useRef<HTMLDivElement>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
   const adVideoRef = useRef<HTMLVideoElement>(null)
@@ -538,8 +535,8 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
   const [statsVisible, setStatsVisible] = useState(false)
   const sourcePlaybackId = useMemo(
-    () => SOURCE_URL.match(/cloudflarestream\.com\/([^/]+)\//)?.[1] ?? 'unknown',
-    [],
+    () => sourceUrl.match(/cloudflarestream\.com\/([^/]+)\//)?.[1] ?? 'unknown',
+    [sourceUrl],
   )
   const sessionCode = useMemo(() => createSessionCode(), [])
   const [nerdStats, setNerdStats] = useState<NerdStats>({
@@ -618,14 +615,14 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
 
     if (!Hls.isSupported()) {
       // Safari 等原生支持 HLS 的浏览器：交给系统自适应，无法手动切档
-      video.src = SOURCE_URL
+      video.src = sourceUrl
       return
     }
 
     // 固定前向缓冲区间，避免自适应把整片一次性缓冲完导致缓冲进度看不出边界
     const hls = new Hls({ enableWorker: true, maxBufferLength: 30, maxMaxBufferLength: 60 })
     hlsRef.current = hls
-    hls.loadSource(SOURCE_URL)
+    hls.loadSource(sourceUrl)
     hls.attachMedia(video)
     let manifestRetries = 0
 
@@ -762,7 +759,7 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
           data.details === ErrorDetails.MANIFEST_LOAD_TIMEOUT
         if (manifestFailed && manifestRetries < MANIFEST_RETRY_LIMIT) {
           manifestRetries += 1
-          hls.loadSource(SOURCE_URL)
+          hls.loadSource(sourceUrl)
         } else {
           hls.startLoad()
         }
@@ -786,9 +783,9 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
       hls.destroy()
       hlsRef.current = null
     }
-    // 依赖必须带上 SOURCE_URL：否则改播放源后（含 Vite HMR）不会重建 hls 实例，
+    // 依赖必须带上 sourceUrl：否则改播放源后（含 Vite HMR）不会重建 hls 实例，
     // 页面会一直卡在旧源（例如已失效的 HEVC 流）上，表现为「换了源还是放不出来」
-  }, [dispatch, SOURCE_URL])
+  }, [dispatch, sourceUrl])
 
   /* 画质切档：auto 交还自适应，其余档位锁定到对应轨道 */
   useEffect(() => {
@@ -840,7 +837,7 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
 
   /* 外挂 PGS 清单：约定与 master 同级，该片源没有 PGS 时不返回清单，属正常情况 */
   useEffect(() => {
-    const indexUrl = new URL(PGS_INDEX_PATH, SOURCE_URL).href
+    const indexUrl = new URL(PGS_INDEX_PATH, sourceUrl).href
     const controller = new AbortController()
     fetch(indexUrl, { signal: controller.signal })
       .then((response) => (response.ok ? response.json() : null))
@@ -1383,7 +1380,7 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
       <video
         ref={videoRef}
         className="absolute inset-0 h-full w-full bg-black object-contain"
-        poster={backdrop(title.art)}
+        poster={titleBackdrop(title)}
         playsInline
       />
 

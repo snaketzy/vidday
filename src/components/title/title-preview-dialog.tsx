@@ -10,7 +10,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { usePlayTarget } from '@/hooks/use-play-target'
-import { backdrop } from '@/lib/art'
+import { titleBackdrop } from '@/lib/title-art'
 import { episodeCount, formatRuntime } from '@/lib/format'
 import { genreNames } from '@/data/genres'
 import { useAppDispatch, useAppSelector } from '@/store/hooks'
@@ -39,7 +39,7 @@ export function TitlePreviewDialog() {
           <>
             <div className="relative">
               <ArtImage
-                src={backdrop(title.art)}
+                src={titleBackdrop(title)}
                 alt={title.name}
                 paletteId={title.id}
                 className="aspect-video w-full"
@@ -172,7 +172,7 @@ export function TitlePreviewDialog() {
                       className="group text-left"
                     >
                       <ArtImage
-                        src={backdrop(item.art)}
+                        src={titleBackdrop(item)}
                         alt={item.name}
                         paletteId={item.id}
                         className="aspect-video w-full rounded-md transition group-hover:ring-2 group-hover:ring-white/25"

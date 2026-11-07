@@ -8,12 +8,13 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { TitleCard } from '@/components/title/title-card'
 import { genreName, genreNames } from '@/data/genres'
 import { usePlayTarget } from '@/hooks/use-play-target'
-import { backdrop, poster } from '@/lib/art'
+import { useResolvedTitle } from '@/hooks/use-resolved-title'
 import { episodeCount, formatRuntime } from '@/lib/format'
 import { similarTitles } from '@/lib/catalog'
+import { titleBackdrop, titlePoster } from '@/lib/title-art'
 import { useAppDispatch, useAppSelector } from '@/store/hooks'
 import { selectIsInMyList, toggleTitle } from '@/store/slices/my-list-slice'
-import { selectAllTitles, selectTitleById } from '@/store/slices/catalog-slice'
+import { selectAllTitles } from '@/store/slices/catalog-slice'
 import { selectProgressForTitle } from '@/store/slices/watch-slice'
 import { NotFoundPage } from '@/pages/not-found-page'
 
@@ -21,7 +22,7 @@ export function TitleDetailPage() {
   const { id } = useParams()
   const dispatch = useAppDispatch()
   const play = usePlayTarget()
-  const title = useAppSelector((state) => selectTitleById(state, id))
+  const { title, status } = useResolvedTitle(id)
   const allTitles = useAppSelector(selectAllTitles)
   const inList = useAppSelector((state) => selectIsInMyList(state, id ?? ''))
   const record = useAppSelector((state) => selectProgressForTitle(state, id ?? ''))
@@ -32,7 +33,7 @@ export function TitleDetailPage() {
     [title, allTitles],
   )
 
-  if (!title) return <NotFoundPage />
+  if (!title) return status === 'error' ? <NotFoundPage /> : <div className="min-h-[70vh] animate-pulse bg-white/5" />
 
   const activeSeason = title.seasons.find((item) => String(item.number) === season) ?? title.seasons[0]
   const resumeEpisode =
@@ -45,7 +46,7 @@ export function TitleDetailPage() {
       {/* 首屏 */}
       <section className="relative h-[62vh] min-h-[440px] w-full overflow-hidden">
         <ArtImage
-          src={backdrop(title.art)}
+          src={titleBackdrop(title)}
           alt={title.name}
           paletteId={title.id}
           eager
@@ -57,7 +58,7 @@ export function TitleDetailPage() {
         <div className="relative flex h-full flex-col justify-end pb-12 pl-4 pr-4 md:pl-12 md:pr-[42%]">
           <div className="flex items-start gap-6">
             <ArtImage
-              src={poster(title.art)}
+              src={titlePoster(title)}
               alt={title.name}
               paletteId={`${title.id}-poster`}
               className="hidden aspect-[9/16] w-[150px] shrink-0 rounded-md shadow-2xl lg:block"

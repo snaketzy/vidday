@@ -50,11 +50,27 @@ const catalogSlice = createSlice({
     resetFilters(state) {
       state.filters = defaultFilters
     },
+    /** 合并后端下发的影片：同 id 覆盖，新 id 追加（mock 与真实库 id 不冲突）。 */
+    upsertTitles(state, action: PayloadAction<Title[]>) {
+      for (const incoming of action.payload) {
+        const index = state.titles.findIndex((title) => title.id === incoming.id)
+        if (index >= 0) state.titles[index] = { ...state.titles[index], ...incoming }
+        else state.titles.push(incoming)
+      }
+    },
   },
 })
 
-export const { setKeyword, clearKeyword, setType, toggleGenre, setGenre, setSortBy, resetFilters } =
-  catalogSlice.actions
+export const {
+  setKeyword,
+  clearKeyword,
+  setType,
+  toggleGenre,
+  setGenre,
+  setSortBy,
+  resetFilters,
+  upsertTitles,
+} = catalogSlice.actions
 
 interface StateWithCatalog {
   catalog: CatalogState

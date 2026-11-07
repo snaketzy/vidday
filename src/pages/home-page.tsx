@@ -1,10 +1,12 @@
-import { useMemo } from 'react'
+import { Fragment, useMemo } from 'react'
 
+import { CarouselBlock } from '@/components/carousel/carousel-block'
 import { ContinueRail } from '@/components/title/continue-rail'
 import { HeroBanner } from '@/components/title/hero-banner'
 import { TitleRail } from '@/components/title/title-rail'
 import { HOME_RAILS, KIDS_RAILS } from '@/data/rails'
 import { FEATURED_IDS } from '@/data/titles'
+import { useCarousels } from '@/hooks/use-carousels'
 import { isKidsTitle, lookupTitles, resolveRail } from '@/lib/catalog'
 import { useAppSelector } from '@/store/hooks'
 import { selectKidsMode } from '@/store/slices/auth-slice'
@@ -13,6 +15,7 @@ import { selectAllTitles } from '@/store/slices/catalog-slice'
 export function HomePage() {
   const titles = useAppSelector(selectAllTitles)
   const kidsOnly = useAppSelector(selectKidsMode)
+  const { status, carousels } = useCarousels('home')
 
   const { featured, rails } = useMemo(() => {
     const pool = kidsOnly ? titles.filter(isKidsTitle) : titles
@@ -24,6 +27,23 @@ export function HomePage() {
     return { featured: picks.length ? picks : fallback, rails: railList }
   }, [titles, kidsOnly])
 
+  // 后台配置了轮播：完全以配置驱动（首屏 + 各轨）；「继续观看」保留为首屏之后/之前的一轨
+  if (status === 'ready' && carousels.length) {
+    const heroFirst = carousels[0]?.variant === 'hero'
+    return (
+      <div className="pb-6">
+        {heroFirst ? null : <ContinueRail />}
+        {carousels.map((carousel, index) => (
+          <Fragment key={carousel.id}>
+            <CarouselBlock carousel={carousel} eager={index === 0} />
+            {heroFirst && index === 0 ? <ContinueRail /> : null}
+          </Fragment>
+        ))}
+      </div>
+    )
+  }
+
+  // 未配置 / 后端不可用：回退到内置演示片单，保证播放器链路可用
   return (
     <div className="pb-6">
       <HeroBanner titles={featured} />

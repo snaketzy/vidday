@@ -5,7 +5,7 @@ import { Check, Info, Play, Plus } from 'lucide-react'
 import { ArtImage } from '@/components/art-image'
 import { Button } from '@/components/ui/button'
 import { usePlayTarget } from '@/hooks/use-play-target'
-import { backdrop } from '@/lib/art'
+import { titleBackdrop } from '@/lib/title-art'
 import { episodeCount, formatRuntime } from '@/lib/format'
 import { useAppDispatch, useAppSelector } from '@/store/hooks'
 import { selectMyListIds, toggleTitle } from '@/store/slices/my-list-slice'
@@ -44,7 +44,7 @@ export function HeroBanner({ titles, intervalMs = 12000 }: HeroBannerProps) {
     <section className="relative h-[78vh] min-h-[520px] w-full overflow-hidden">
       <ArtImage
         key={title.id}
-        src={backdrop(title.art)}
+        src={titleBackdrop(title)}
         alt={title.name}
         paletteId={title.id}
         eager

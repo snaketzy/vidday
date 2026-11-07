@@ -4,7 +4,7 @@ import { ArtImage } from '@/components/art-image'
 import { Button } from '@/components/ui/button'
 import { RailScroller } from '@/components/title/rail-scroller'
 import { usePlayTarget } from '@/hooks/use-play-target'
-import { backdrop } from '@/lib/art'
+import { titleBackdrop } from '@/lib/title-art'
 import { formatTime } from '@/lib/format'
 import { useAppDispatch, useAppSelector } from '@/store/hooks'
 import { selectKidsMode } from '@/store/slices/auth-slice'
@@ -39,7 +39,7 @@ export function ContinueRail({ heading = '继续观看' }: { heading?: string })
                 onClick={() => play(title, progress.episodeId)}
               >
                 <ArtImage
-                  src={backdrop(title.art)}
+                  src={titleBackdrop(title)}
                   alt={title.name}
                   paletteId={title.id}
                   className="h-full w-full"

@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router'
 
 import { ArtImage } from '@/components/art-image'
 import { Button } from '@/components/ui/button'
-import { backdrop, poster } from '@/lib/art'
+import { titleBackdrop, titlePoster } from '@/lib/title-art'
 import { episodeCount, formatRuntime } from '@/lib/format'
 import { usePlayTarget } from '@/hooks/use-play-target'
 import { useAppDispatch, useAppSelector } from '@/store/hooks'
@@ -63,7 +63,7 @@ export function TitleCard({
       }}
     >
       <ArtImage
-        src={isPoster ? poster(title.art) : backdrop(title.art)}
+        src={isPoster ? titlePoster(title) : titleBackdrop(title)}
         alt={title.name}
         paletteId={title.id}
         eager={eager}

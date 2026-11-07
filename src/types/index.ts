@@ -43,6 +43,20 @@ export interface Title {
   art: string
   /** 预告片文案（播放占位） */
   trailerNote: string
+  /**
+   * 以下字段由 moive-database-op 后端下发（`/api/public/*`），
+   * 本地 mock 数据不携带；为空时回退到 `art` 生成的占位画面与内置演示片源。
+   */
+  /** 英文标题（后端接入后用于中英对照） */
+  englishTitle?: string | null
+  /** 横版剧照（R2） */
+  backdropUrl?: string | null
+  /** 竖版海报（R2） */
+  posterUrl?: string | null
+  /** HLS 播放地址 */
+  playUrl?: string | null
+  /** 数据来源：mock = 本地演示数据，api = 后端真实库 */
+  source?: 'mock' | 'api'
 }
 
 export interface Profile {

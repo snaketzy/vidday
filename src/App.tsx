@@ -3,6 +3,7 @@ import { Navigate, Outlet, Route, Routes } from 'react-router'
 import { AppLayout } from '@/components/layout/app-layout'
 import { AccountPage } from '@/pages/account-page'
 import { BrowsePage } from '@/pages/browse-page'
+import { CollectionPage } from '@/pages/collection-page'
 import { HomePage } from '@/pages/home-page'
 import { LoginPage } from '@/pages/login-page'
 import { MyListPage } from '@/pages/my-list-page'
@@ -46,6 +47,7 @@ export function App() {
             <Route path="/" element={<HomePage />} />
             <Route path="/browse" element={<BrowsePage />} />
             <Route path="/title/:id" element={<TitleDetailPage />} />
+            <Route path="/collection/:id" element={<CollectionPage />} />
             <Route path="/search" element={<SearchPage />} />
             <Route path="/my-list" element={<MyListPage />} />
             <Route path="*" element={<NotFoundPage />} />

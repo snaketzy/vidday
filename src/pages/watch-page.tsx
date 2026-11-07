@@ -2,13 +2,12 @@ import { useMemo } from 'react'
 import { useParams } from 'react-router'
 
 import { VideoPlayer } from '@/components/title/video-player'
+import { useResolvedTitle } from '@/hooks/use-resolved-title'
 import { NotFoundPage } from '@/pages/not-found-page'
-import { useAppSelector } from '@/store/hooks'
-import { selectTitleById } from '@/store/slices/catalog-slice'
 
 export function WatchPage() {
   const { id, episodeId } = useParams()
-  const title = useAppSelector((state) => selectTitleById(state, id))
+  const { title, status } = useResolvedTitle(id)
 
   const episode = useMemo(
     () =>
@@ -18,7 +17,7 @@ export function WatchPage() {
     [title, episodeId],
   )
 
-  if (!title) return <NotFoundPage />
+  if (!title) return status === 'error' ? <NotFoundPage /> : <div className="h-screen w-screen bg-black" />
   if (episodeId && !episode) return <NotFoundPage />
 
   return <VideoPlayer title={title} episode={episode} />
