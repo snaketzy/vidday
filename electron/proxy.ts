@@ -38,6 +38,16 @@ const TEST_GROUP_COUNT = 6
 const SUBSCRIPTION_UA = 'clash-verge/v2.0.0'
 /** 订阅拉取超时 */
 const SUBSCRIPTION_FETCH_TIMEOUT = 15_000
+/**
+ * 启动探测外网连通性的目标。
+ * 注意不能再用 www.gstatic.com —— 它走 Google CDN、国内可直连（mihomo 正是用它做延迟测试），
+ * 无法代表「能上外网」；这里用被封锁的 www.google.com，直连不可达、经代理才返回 204。
+ */
+const EXTERNAL_PROBE_URL = 'https://www.google.com/generate_204'
+/** 启动探测超时；拿不准宁可走代理，故宁短勿长 */
+const EXTERNAL_PROBE_TIMEOUT = 3000
+/** 探测专用 session 的分区名（无 persist 前缀即内存态） */
+const PROBE_PARTITION = 'vidday-network-probe'
 /** 未显式配置时的订阅默认更新间隔（秒） */
 const DEFAULT_SUBSCRIPTION_INTERVAL = 3600
 /** 按节点名称识别常见地区；mihomo 只会显示实际匹配到节点的组。 */
@@ -235,6 +245,40 @@ async function fetchSubscription(config: LinesConfig): Promise<SubscriptionState
   } finally {
     clearTimeout(timer)
   }
+}
+
+/** 探测专用 session（内存态，无 persist 前缀）；与 defaultSession 隔离，避免受本应用内核代理影响 */
+let probeSession: Session | null = null
+
+/**
+ * 启动时判定网络出口：本机（跟随系统代理设置）可连上外网则不启用内核代理，否则启用。
+ * 用 Chromium 网络栈 + 独立 session 的 system 模式 —— 会真正走 macOS 系统代理，
+ * 因此能反映「本机代理开/关」：本机代理开着且能出外网即判定可直连，反之走内置内核。
+ */
+export async function resolveHostNetworkOnStartup(): Promise<boolean> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), EXTERNAL_PROBE_TIMEOUT)
+  try {
+    probeSession ??= session.fromPartition(PROBE_PARTITION)
+    await probeSession.setProxy({ mode: 'system' })
+    const response = await probeSession.fetch(EXTERNAL_PROBE_URL, { signal: controller.signal })
+    // 严格等值 204：经系统代理真能到达 Google 才命中；劫持页多返回 200，不能当作可达
+    return response.status === 204
+  } catch {
+    return false
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/**
+ * 落定启动探测结果：更新运行时状态并写入用户配置。
+ * 原理上「重启覆盖」——每次应用启动都会重新判定，手动开关只在本次会话内有效。
+ */
+export function setHostNetworkMode(hostNetwork: boolean): ProxyStatus {
+  writeUserConfig({ useHostNetwork: hostNetwork })
+  status = { ...status, hostNetwork }
+  return status
 }
 
 /**

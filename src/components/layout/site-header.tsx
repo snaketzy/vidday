@@ -17,8 +17,10 @@ import {
 import { Input } from '@/components/ui/input'
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from '@/components/ui/sheet'
 import { notifications } from '@/data/notifications'
+import { LATEST_WINDOW_DAYS } from '@/hooks/use-latest-titles'
 import { useGenres } from '@/hooks/use-genres'
 import { matchesKeyword } from '@/lib/catalog'
+import { toLatestHref } from '@/lib/links'
 import { avatarArt } from '@/lib/art'
 import { useAppDispatch, useAppSelector } from '@/store/hooks'
 import { logout, selectActiveProfile } from '@/store/slices/auth-slice'
@@ -29,7 +31,7 @@ const NAV_ITEMS = [
   { label: '首页', to: '/' },
   { label: '剧集', to: '/browse?type=series&sort=newest' },
   { label: '电影', to: '/browse?type=movie' },
-  { label: '新上线', to: '/browse?sort=newest' },
+  { label: '最新上架', to: toLatestHref(LATEST_WINDOW_DAYS) },
   { label: '我的片单', to: '/my-list' },
 ]
 
@@ -142,9 +144,17 @@ export function SiteHeader() {
             const params = new URLSearchParams(query ?? '')
             const itemType = params.get('type')
             const hasSort = params.has('sort')
+            // 「最新上架」以 addedWithin 选中；否则普通 /browse 也会误亮
+            const hasAddedWithin = params.has('addedWithin')
             const active =
               location.pathname === path &&
-              (itemType ? currentType === itemType && !currentGenre : hasSort ? Boolean(searchParams.has('sort')) && !currentType && !currentGenre : !currentType && !currentGenre && !searchParams.has('sort'))
+              (hasAddedWithin
+                ? searchParams.has('addedWithin')
+                : itemType
+                  ? currentType === itemType && !currentGenre
+                  : hasSort
+                    ? Boolean(searchParams.has('sort')) && !currentType && !currentGenre
+                    : !currentType && !currentGenre && !searchParams.has('sort'))
             return (
               <NavLink key={item.to} to={item.to} className={navLinkClass(active)}>
                 {item.label}

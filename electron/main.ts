@@ -3,7 +3,14 @@ import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-import { applyProxyToSession, registerProxyIpc, setupProxy, teardownProxy } from './proxy'
+import {
+  applyProxyToSession,
+  registerProxyIpc,
+  resolveHostNetworkOnStartup,
+  setHostNetworkMode,
+  setupProxy,
+  teardownProxy,
+} from './proxy'
 
 /**
  * 渲染层走自定义协议而非 file://：
@@ -90,9 +97,11 @@ async function createWindow(): Promise<void> {
     return { action: 'deny' }
   })
 
-  // 先起代理再加载页面，保证首个媒体请求就走本地线路。
+  // 启动探测（本机含系统代理能否连上外网）与内核拉起并行，避免探测拖慢启动。
+  // 本机代理开着且能出外网则不启用内核代理，否则启用；内核始终运行，面板线路/测速仍可用。
   // dev 下 dev server 与本地后端都在 bypass 规则内，不会被绕进代理。
-  await setupProxy()
+  const [hostNetwork] = await Promise.all([resolveHostNetworkOnStartup(), setupProxy()])
+  setHostNetworkMode(hostNetwork)
   await applyProxyToSession(session.defaultSession)
 
   const devUrl = process.env.ELECTRON_RENDERER_URL
@@ -128,8 +137,9 @@ if (!gotLock) {
     })
   })
 
+  // 关掉窗口即退出应用（含 macOS），并由 before-quit 回收 mihomo 内核，不留后台进程
   app.on('window-all-closed', () => {
-    if (process.platform !== 'darwin') app.quit()
+    app.quit()
   })
 
   app.on('before-quit', () => {
