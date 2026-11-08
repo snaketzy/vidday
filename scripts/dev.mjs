@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -9,14 +10,29 @@ import { createServer } from 'vite'
  * 桌面开发模式：起 Vite dev server -> 构建主进程/预加载 -> 拉起 Electron。
  * Electron 通过 ELECTRON_RENDERER_URL 加载 dev server，从而保留 HMR。
  *
- * 同时托管后台服务（server/）：8790 已在监听就复用现成实例，否则随前端一起拉起。
+ * 同时托管后台服务（server/）：端口已在监听就复用现成实例，否则随前端一起拉起。
  */
 // 固定用 5270 起，避开 5173/5174 等其他项目常用的端口；被占用时 Vite 自动向上顺延
 const DEV_PORT = 5270
-// 后台服务端口，与 server/.env 的 PORT 保持一致
-const BACKEND_PORT = 8791
-const BACKEND_HEALTH = `http://127.0.0.1:${BACKEND_PORT}/health`
 const projectRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
+
+/**
+ * 后台服务端口直接读 `server/.env`，与后端同源，避免两处配置漂移。
+ * 缺配置时回退 8790。
+ */
+function backendPort() {
+  try {
+    const text = readFileSync(path.join(projectRoot, 'server', '.env'), 'utf8')
+    const matched = text.match(/^\s*PORT\s*=\s*(\d+)\s*$/m)
+    if (matched) return Number(matched[1])
+  } catch {
+    // 未创建 server/.env 时按默认端口探测
+  }
+  return 8790
+}
+
+const BACKEND_PORT = backendPort()
+const BACKEND_HEALTH = `http://127.0.0.1:${BACKEND_PORT}/health`
 
 /** 探测后台服务是否已在监听且健康（/health 会顺带探一次 MySQL）。 */
 async function backendAlive() {
@@ -96,7 +112,7 @@ child.on('close', async (code) => {
   process.exit(code ?? 0)
 })
 
-// Ctrl+C / kill：连带回收自己拉起的后台服务，避免 8790 端口残留
+// Ctrl+C / kill：连带回收自己拉起的后台服务，避免端口残留
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, () => {
     stopBackend()

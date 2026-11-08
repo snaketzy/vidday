@@ -86,6 +86,8 @@ export interface PublicCreditEntry {
   personId: number | null
   name: string
   englishName: string | null
+  /** 'male' | 'female' | 'unknown'；用于区分男女主角 / 配角 */
+  gender: string
   avatarUrl: string | null
   department: string
   job: string
@@ -138,6 +140,17 @@ export interface PublicPersonCredit {
 
 export interface PublicPersonDetail extends PublicPerson {
   credits: PublicPersonCredit[]
+}
+
+/** 合作影人：与该影人出现在同一部作品里的另一位影人。 */
+export interface PublicCollaborator {
+  personId: number
+  name: string
+  englishName: string | null
+  gender: string
+  avatarUrl: string | null
+  /** 共同参演 / 参与制作的作品数 */
+  sharedCount: number
 }
 
 export interface PublicCollectionDetail {
@@ -284,6 +297,7 @@ function normalizeCreditEntry(raw: Json): PublicCreditEntry | null {
     personId: num(raw.personId),
     name,
     englishName: text(raw.englishName),
+    gender: text(raw.gender) ?? 'unknown',
     avatarUrl: text(raw.avatarUrl),
     department: text(raw.department) ?? '',
     job: text(raw.job) ?? '',
@@ -525,6 +539,30 @@ export async function fetchPersonDetail(
         })
       : [],
   }
+}
+
+/** 合作影人：与该影人出现在同一部作品里的其他影人（按共同作品数降序）。 */
+export async function fetchPersonCollaborators(
+  id: number,
+  signal?: AbortSignal,
+): Promise<PublicCollaborator[]> {
+  const body = unwrap(await getJson(`/public/people/${id}/collaborators`, signal))
+  if (!Array.isArray(body.collaborators)) return []
+  return body.collaborators.filter(isRecord).flatMap((raw) => {
+    const personId = num(raw.personId)
+    const name = text(raw.name)
+    if (personId === null || !name) return []
+    return [
+      {
+        personId,
+        name,
+        englishName: text(raw.englishName),
+        gender: text(raw.gender) ?? 'unknown',
+        avatarUrl: text(raw.avatarUrl),
+        sharedCount: num(raw.sharedCount) ?? 0,
+      },
+    ]
+  })
 }
 
 /** 专题详情。 */

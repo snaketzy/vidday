@@ -87,6 +87,8 @@ export interface PublicCreditEntry {
   personId: number | null
   name: string
   englishName: string | null
+  /** 'male' | 'female' | 'unknown'；供前台区分男女主角/配角 */
+  gender: string
   avatarUrl: string | null
   department: string
   job: string
@@ -215,4 +217,22 @@ export interface PublicPersonDetail extends PublicPerson {
 export interface PublicPersonResponse {
   schemaVersion: number
   person: PublicPersonDetail
+}
+
+/** 合作影人：与该影人出现在同一部作品里的另一位影人。 */
+export interface PublicCollaborator {
+  personId: number
+  name: string
+  englishName: string | null
+  /** 'male' | 'female' | 'unknown' */
+  gender: string
+  avatarUrl: string | null
+  /** 共同参演 / 参与制作的作品数，用于排序与展示 */
+  sharedCount: number
+}
+
+export interface PublicCollaboratorsResponse {
+  schemaVersion: number
+  personId: number
+  collaborators: PublicCollaborator[]
 }

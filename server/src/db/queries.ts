@@ -13,6 +13,7 @@ import type {
   ContentType,
   PublicCarousel,
   PublicCarouselCard,
+  PublicCollaborator,
   PublicCollectionDetail,
   PublicCreditEntry,
   PublicGenre,
@@ -160,6 +161,7 @@ interface CreditRow extends RowDataPacket {
   p_imdb_id: string | null
   p_tmdb_id: number | null
   p_profile_url: string | null
+  p_gender: string | null
 }
 
 /** 影片 / 剧集的展示列（卡片、详情共用）。 */
@@ -592,7 +594,7 @@ async function creditsOf(
 ): Promise<CreditRow[]> {
   const [rows] = await getPool().query<CreditRow[]>(
     `SELECT c.person_id, c.person_name, c.person_name_en, c.profile_url, c.department, c.job, c.char_name,
-            p.imdb_id AS p_imdb_id, p.tmdb_id AS p_tmdb_id, p.profile_url AS p_profile_url
+            p.imdb_id AS p_imdb_id, p.tmdb_id AS p_tmdb_id, p.profile_url AS p_profile_url, p.gender AS p_gender
      FROM \`${table}\` c LEFT JOIN \`people\` p ON p.id = c.person_id
      WHERE c.${column} = ?
      ORDER BY c.sort_order, c.id`,
@@ -734,6 +736,7 @@ async function loadTitleCreditsUncached(id: number): Promise<PublicTitleCredits 
       personId: num(row.person_id),
       name: String(row.person_name),
       englishName: str(row.person_name_en),
+      gender: str(row.p_gender) ?? 'unknown',
       avatarUrl: creditAvatar(row),
       department: String(row.department),
       job: String(row.job),
@@ -953,6 +956,77 @@ async function loadPersonDetailUncached(id: number): Promise<PublicPersonDetail 
     biography: str(person.biography_zh) ?? str(person.biography),
     credits,
   }
+}
+
+/** 合作影人展示上限：只取共同作品最多的前 N 位，避免长尾把首屏撑爆。 */
+const COLLABORATOR_LIMIT = 20
+
+interface CollaboratorRow extends RowDataPacket {
+  person_id: number
+  name: string | null
+  english_name: string | null
+  gender: string | null
+  imdb_id: string | null
+  tmdb_id: number | null
+  profile_url: string | null
+  shared_count: number
+}
+
+/**
+ * 合作影人：与该影人出现在同一部影片 / 剧集里的其他影人，按共同作品数降序。
+ *
+ * 影片与剧集分表统计后合并，作品键加前缀区分（两表 ID 空间重叠）。
+ * 同一部作品内的重复署名（如既署名演员又署名编剧）按 DISTINCT 只计一次。
+ */
+export async function getCollaborators(id: number): Promise<PublicCollaborator[]> {
+  return cached(`person-collaborators:${id}`, DETAIL_TTL_MS, () => loadCollaboratorsUncached(id))
+}
+
+async function loadCollaboratorsUncached(id: number): Promise<PublicCollaborator[]> {
+  const [rows] = await getPool().query<CollaboratorRow[]>(
+    `SELECT p.id AS person_id, p.name, p.english_name, p.gender,
+            p.imdb_id, p.tmdb_id, p.profile_url, x.shared_count
+     FROM (
+       SELECT pid, COUNT(DISTINCT title_key) AS shared_count
+       FROM (
+         SELECT c2.person_id AS pid, CONCAT('m', c1.movie_id) AS title_key
+         FROM \`movie_credits\` c1
+         JOIN \`movie_credits\` c2 ON c2.movie_id = c1.movie_id AND c2.person_id <> c1.person_id
+         WHERE c1.person_id = ?
+         UNION ALL
+         SELECT c2.person_id AS pid, CONCAT('s', c1.series_id) AS title_key
+         FROM \`series_credits\` c1
+         JOIN \`series_credits\` c2 ON c2.series_id = c1.series_id AND c2.person_id <> c1.person_id
+         WHERE c1.person_id = ?
+       ) pair
+       WHERE pid IS NOT NULL
+       GROUP BY pid
+     ) x
+     JOIN \`people\` p ON p.id = x.pid
+     ORDER BY x.shared_count DESC, p.id
+     LIMIT ?`,
+    [id, id, COLLABORATOR_LIMIT]
+  )
+
+  const collaborators: PublicCollaborator[] = []
+  for (const row of rows) {
+    const personId = num(row.person_id)
+    const name = str(row.name)
+    if (personId === null || !name) continue
+    collaborators.push({
+      personId,
+      name,
+      englishName: str(row.english_name),
+      gender: str(row.gender) ?? 'unknown',
+      avatarUrl: personAvatar({
+        imdb_id: str(row.imdb_id),
+        tmdb_id: num(row.tmdb_id),
+        profile_url: str(row.profile_url),
+      }),
+      sharedCount: intOr(row.shared_count),
+    })
+  }
+  return collaborators
 }
 
 /**

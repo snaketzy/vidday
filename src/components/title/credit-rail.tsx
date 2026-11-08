@@ -1,39 +1,9 @@
-import { useState } from 'react'
 import { cn } from 'cn'
 import { Link } from 'react-router'
 
-import { paletteFor } from '@/lib/art'
+import { PersonAvatar } from '@/components/title/person-avatar'
 import { creditRoleLabel } from '@/lib/credits'
 import type { PublicCreditEntry } from '@/lib/public-api'
-
-/** 影人头像：圆形，加载失败或缺失时用姓名首字 + 稳定渐变色兜底。 */
-function PersonAvatar({ src, name, paletteId }: { src: string | null; name: string; paletteId: string }) {
-  const [failed, setFailed] = useState(false)
-  const [from, to] = paletteFor(paletteId)
-
-  return (
-    <div
-      className="relative size-[84px] shrink-0 overflow-hidden rounded-full border border-white/10 transition group-hover/credit:border-white/50"
-      style={{ backgroundImage: `linear-gradient(135deg, ${from}, ${to})` }}
-    >
-      {src && !failed ? (
-        <img
-          src={src}
-          alt={name}
-          loading="lazy"
-          decoding="async"
-          draggable={false}
-          onError={() => setFailed(true)}
-          className="h-full w-full object-cover"
-        />
-      ) : (
-        <span className="flex h-full w-full items-center justify-center text-lg font-semibold text-white/85">
-          {name.slice(0, 1)}
-        </span>
-      )}
-    </div>
-  )
-}
 
 function CreditTile({ entry }: { entry: PublicCreditEntry }) {
   const body = (
@@ -42,6 +12,7 @@ function CreditTile({ entry }: { entry: PublicCreditEntry }) {
         src={entry.avatarUrl}
         name={entry.name}
         paletteId={entry.englishName ?? entry.name}
+        className="size-[84px] border border-white/10 transition group-hover/credit:border-white/50"
       />
       {/* 英文在上、中文在下 */}
       <p className="mt-2 line-clamp-2 text-xs font-medium leading-tight text-white/90">

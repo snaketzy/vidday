@@ -7,6 +7,10 @@ interface ImportMetaEnv {
   readonly VITE_APP_API_KEY?: string
   /** 中插广告总开关，仅显式 'false' 时关闭 */
   readonly VITE_ENABLE_ADS?: string
+  /** Web 端「下载客户端」入口：各平台下载地址，留空则仅展示图标不跳转 */
+  readonly VITE_DOWNLOAD_WINDOWS_URL?: string
+  readonly VITE_DOWNLOAD_MACOS_URL?: string
+  readonly VITE_DOWNLOAD_ANDROID_URL?: string
 }
 
 /** 订阅拉取状态。字段与 `electron/shared.ts` 的 SubscriptionState 对齐。 */

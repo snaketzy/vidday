@@ -4,6 +4,7 @@
  * 数据库 `job` / `department` 存的是 TMDB 英文枚举，这里映射为观众可读的中文，
  * 未覆盖的职位原样回退英文，避免出现空白标签。
  */
+import type { PublicCreditEntry } from '@/lib/public-api'
 
 const JOB_LABELS: Record<string, string> = {
   Director: '导演',
@@ -69,4 +70,45 @@ export function departmentLabel(department: string): string {
  */
 export function creditRoleLabel(entry: { job: string; character: string | null }): string {
   return entry.character ? `饰 ${entry.character}` : jobLabel(entry.job)
+}
+
+/** 详情页首屏的一张署名卡：带角色定位标签（导演 / 男主角……）。 */
+export interface CreditHighlight {
+  label: string
+  entry: PublicCreditEntry
+}
+
+/**
+ * 参与主要角色判定的演员窗口。
+ * `sort_order` 是署名总序（含职员），演员按序前 10 位足以覆盖主角与主要配角，
+ * 再往后多为次要角色，取之会把龙套当成配角。
+ */
+const HIGHLIGHT_CAST_WINDOW = 10
+
+/**
+ * 详情页只展示「导演 + 男女主角 + 男女配角」。
+ *
+ * 判定方式：演员沿用署名顺序（越靠前越主要），按性别各取前两位——
+ * 第 1 位为主角、第 2 位为配角；缺女性角色的影片（如纯男性阵容）自动省略对应槽位。
+ */
+export function pickCreditHighlights(
+  cast: PublicCreditEntry[],
+  crew: PublicCreditEntry[],
+): CreditHighlight[] {
+  const highlights: CreditHighlight[] = []
+
+  for (const member of crew) {
+    if (member.job === 'Director') highlights.push({ label: '导演', entry: member })
+  }
+
+  const candidates = cast.slice(0, HIGHLIGHT_CAST_WINDOW)
+  const males = candidates.filter((entry) => entry.gender === 'male')
+  const females = candidates.filter((entry) => entry.gender === 'female')
+
+  if (males[0]) highlights.push({ label: '男主角', entry: males[0] })
+  if (females[0]) highlights.push({ label: '女主角', entry: females[0] })
+  if (males[1]) highlights.push({ label: '男配角', entry: males[1] })
+  if (females[1]) highlights.push({ label: '女配角', entry: females[1] })
+
+  return highlights
 }

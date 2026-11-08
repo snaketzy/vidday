@@ -13,6 +13,7 @@ import { PersonPage } from '@/pages/person-page'
 import { PlaybackLinesPage } from '@/pages/playback-lines-page'
 import { ProfilesPage } from '@/pages/profiles-page'
 import { SearchPage } from '@/pages/search-page'
+import { TitleCreditsPage } from '@/pages/title-credits-page'
 import { TitleDetailPage } from '@/pages/title-detail-page'
 import { WatchPage } from '@/pages/watch-page'
 import { useAppSelector } from '@/store/hooks'
@@ -51,6 +52,7 @@ export function App() {
               <Route path="/" element={<HomePage />} />
               <Route path="/browse" element={<BrowsePage />} />
               <Route path="/title/:id" element={<TitleDetailPage />} />
+              <Route path="/title/:id/credits" element={<TitleCreditsPage />} />
               <Route path="/person/:id" element={<PersonPage />} />
               <Route path="/collection/:id" element={<CollectionPage />} />
               <Route path="/search" element={<SearchPage />} />

@@ -1,16 +1,18 @@
 import { useMemo, useState } from 'react'
-import { Check, Clock, Play, Plus, Star, ThumbsUp } from 'lucide-react'
+import { Check, ChevronRight, Clock, Play, Plus, Star, ThumbsUp } from 'lucide-react'
 import { Link, useParams } from 'react-router'
 
 import { ArtImage } from '@/components/art-image'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { CreditRail } from '@/components/title/credit-rail'
+import { ClientDownloadCta } from '@/components/title/client-download-cta'
+import { CreditHighlights } from '@/components/title/credit-highlights'
 import { TitleCard } from '@/components/title/title-card'
 import { genreName, genreNames } from '@/data/genres'
 import { usePlayTarget } from '@/hooks/use-play-target'
 import { useResolvedTitle } from '@/hooks/use-resolved-title'
 import { useTitleCredits } from '@/hooks/use-title-credits'
+import { pickCreditHighlights } from '@/lib/credits'
 import { episodeCount, formatRuntime } from '@/lib/format'
 import { similarTitles } from '@/lib/catalog'
 import { titleBackdrop, titlePoster } from '@/lib/title-art'
@@ -29,11 +31,19 @@ export function TitleDetailPage() {
   const inList = useAppSelector((state) => selectIsInMyList(state, id ?? ''))
   const record = useAppSelector((state) => selectProgressForTitle(state, id ?? ''))
   const [season, setSeason] = useState('1')
-  const credits = useTitleCredits(id)
+  const { credits } = useTitleCredits(id)
+
+  /** Electron 桌面外壳注入 window.vidday；浏览器下不存在，据此区分 Web 端。 */
+  const isDesktop = typeof window !== 'undefined' && Boolean(window.vidday)
 
   const similar = useMemo(
     () => (title ? similarTitles(title, allTitles, 12) : []),
     [title, allTitles],
+  )
+
+  const highlights = useMemo(
+    () => (credits ? pickCreditHighlights(credits.cast, credits.crew) : []),
+    [credits],
   )
 
   if (!title) return status === 'error' ? <NotFoundPage /> : <div className="min-h-[70vh] animate-pulse bg-white/5" />
@@ -95,19 +105,25 @@ export function TitleDetailPage() {
               <p className="mt-4 max-w-2xl text-sm leading-relaxed text-white/85">{title.logline}</p>
 
               <div className="mt-6 flex flex-wrap items-center gap-3">
-                <Button size="lg" className="bg-white text-black hover:bg-white/85" onClick={() => play(title)}>
-                  <Play className="size-5 fill-current" />
-                  {resumeEpisode ? '继续观看' : '播放'}
-                </Button>
-                <Button
-                  size="lg"
-                  variant="secondary"
-                  className="bg-white/25 text-white backdrop-blur hover:bg-white/35"
-                  onClick={() => dispatch(toggleTitle(title.id))}
-                >
-                  {inList ? <Check className="size-5" /> : <Plus className="size-5" />}
-                  {inList ? '已加入片单' : '加入片单'}
-                </Button>
+                {isDesktop ? (
+                  <>
+                    <Button size="lg" className="bg-white text-black hover:bg-white/85" onClick={() => play(title)}>
+                      <Play className="size-5 fill-current" />
+                      {resumeEpisode ? '继续观看' : '播放'}
+                    </Button>
+                    <Button
+                      size="lg"
+                      variant="secondary"
+                      className="bg-white/25 text-white backdrop-blur hover:bg-white/35"
+                      onClick={() => dispatch(toggleTitle(title.id))}
+                    >
+                      {inList ? <Check className="size-5" /> : <Plus className="size-5" />}
+                      {inList ? '已加入片单' : '加入片单'}
+                    </Button>
+                  </>
+                ) : (
+                  <ClientDownloadCta />
+                )}
                 <Button
                   size="icon"
                   variant="outline"
@@ -117,6 +133,10 @@ export function TitleDetailPage() {
                   <ThumbsUp className="size-5" />
                 </Button>
               </div>
+
+              {isDesktop ? null : (
+                <p className="mt-3 text-xs text-white/50">本片需在客户端观看，请下载对应系统版本</p>
+              )}
 
               {resumeEpisode ? (
                 <p className="mt-4 text-xs text-white/55">
@@ -235,28 +255,22 @@ export function TitleDetailPage() {
             </div>
           </section>
 
-          {/* 演职人员 */}
-          {credits && (credits.cast.length > 0 || credits.crew.length > 0) ? (
+          {/* 演职人员：仅展示导演 + 男女主角 / 配角，全名单走「更多」 */}
+          {highlights.length ? (
             <section className="mt-10">
-              <h2 className="text-lg font-semibold text-white/90">演职人员</h2>
-
-              {credits.cast.length ? (
-                <div className="mt-4">
-                  <h3 className="text-xs font-semibold uppercase tracking-widest text-white/40">演员</h3>
-                  <div className="mt-3">
-                    <CreditRail entries={credits.cast} />
-                  </div>
-                </div>
-              ) : null}
-
-              {credits.crew.length ? (
-                <div className="mt-8">
-                  <h3 className="text-xs font-semibold uppercase tracking-widest text-white/40">制作团队</h3>
-                  <div className="mt-3">
-                    <CreditRail entries={credits.crew} />
-                  </div>
-                </div>
-              ) : null}
+              <div className="flex items-baseline justify-between gap-4">
+                <h2 className="text-lg font-semibold text-white/90">演职人员</h2>
+                <Link
+                  to={`/title/${title.id}/credits`}
+                  className="inline-flex items-center gap-0.5 text-sm text-white/55 transition hover:text-white"
+                >
+                  更多
+                  <ChevronRight className="size-4" />
+                </Link>
+              </div>
+              <div className="mt-4">
+                <CreditHighlights items={highlights} />
+              </div>
             </section>
           ) : null}
         </div>
