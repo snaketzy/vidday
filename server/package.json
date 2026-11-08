@@ -1,0 +1,20 @@
+{
+  "name": "vidday-server",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Vidday 自有后台服务：直连 MySQL 提供对外只读内容接口与用户侧数据接口",
+  "scripts": {
+    "dev": "node --watch --experimental-strip-types src/index.ts",
+    "start": "node --experimental-strip-types src/index.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "fastify": "^5.6.1",
+    "mysql2": "^3.14.4"
+  },
+  "devDependencies": {
+    "@types/node": "^22.18.0",
+    "typescript": "^5.9.0"
+  }
+}

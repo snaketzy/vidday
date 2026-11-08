@@ -44,7 +44,7 @@ export interface Title {
   /** 预告片文案（播放占位） */
   trailerNote: string
   /**
-   * 以下字段由 moive-database-op 后端下发（`/api/public/*`），
+   * 以下字段由 Vidday 自有后台服务（`server/`）下发（`/api/public/*`），
    * 本地 mock 数据不携带；为空时回退到 `art` 生成的占位画面与内置演示片源。
    */
   /** 英文标题（后端接入后用于中英对照） */

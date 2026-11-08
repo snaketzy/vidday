@@ -5,10 +5,12 @@ import { Link, useParams } from 'react-router'
 import { ArtImage } from '@/components/art-image'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { CreditRail } from '@/components/title/credit-rail'
 import { TitleCard } from '@/components/title/title-card'
 import { genreName, genreNames } from '@/data/genres'
 import { usePlayTarget } from '@/hooks/use-play-target'
 import { useResolvedTitle } from '@/hooks/use-resolved-title'
+import { useTitleCredits } from '@/hooks/use-title-credits'
 import { episodeCount, formatRuntime } from '@/lib/format'
 import { similarTitles } from '@/lib/catalog'
 import { titleBackdrop, titlePoster } from '@/lib/title-art'
@@ -27,6 +29,7 @@ export function TitleDetailPage() {
   const inList = useAppSelector((state) => selectIsInMyList(state, id ?? ''))
   const record = useAppSelector((state) => selectProgressForTitle(state, id ?? ''))
   const [season, setSeason] = useState('1')
+  const credits = useTitleCredits(id)
 
   const similar = useMemo(
     () => (title ? similarTitles(title, allTitles, 12) : []),
@@ -231,6 +234,31 @@ export function TitleDetailPage() {
               ))}
             </div>
           </section>
+
+          {/* 演职人员 */}
+          {credits && (credits.cast.length > 0 || credits.crew.length > 0) ? (
+            <section className="mt-10">
+              <h2 className="text-lg font-semibold text-white/90">演职人员</h2>
+
+              {credits.cast.length ? (
+                <div className="mt-4">
+                  <h3 className="text-xs font-semibold uppercase tracking-widest text-white/40">演员</h3>
+                  <div className="mt-3">
+                    <CreditRail entries={credits.cast} />
+                  </div>
+                </div>
+              ) : null}
+
+              {credits.crew.length ? (
+                <div className="mt-8">
+                  <h3 className="text-xs font-semibold uppercase tracking-widest text-white/40">制作团队</h3>
+                  <div className="mt-3">
+                    <CreditRail entries={credits.crew} />
+                  </div>
+                </div>
+              ) : null}
+            </section>
+          ) : null}
         </div>
 
         {/* 侧栏 */}

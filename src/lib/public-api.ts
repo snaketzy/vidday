@@ -1,11 +1,11 @@
 /**
- * moive-database-op 对外接口客户端。
+ * Vidday 自有后台服务（`server/`）对外接口客户端。
  *
  * 契约面刻意收窄：前端只消费轻量卡片 / 详情 DTO，不感知后端内部模型。
- * 由于两个项目不同仓库、无法共享类型，这里镜像一份契约类型，
- * 并对响应做窄校验（schemaVersion + 逐字段归一），
+ * 前端与 server 各自镜像一份契约类型并做窄校验（schemaVersion + 逐字段归一），
  * 后端字段漂移时宁可丢弃单项、也不让错误数据流进 UI。
  *
+ * 所有请求需携带 App 级密钥（`x-app-key`，取自 `VITE_APP_API_KEY`）；
  * 内容侧为只读；观看进度 / 我的片单为设备归属的可写端点，
  * 以 `X-Device-Id` 标识设备（见 `@/lib/device-id`）。
  */
@@ -78,6 +78,66 @@ export interface PublicTitleDetail {
   playUrl: string | null
   collections: { id: number; name: string }[]
   updatedAt: string
+}
+
+/** 单条演职员署名。 */
+export interface PublicCreditEntry {
+  /** 影人 ID；影人已删除时为 null（仅保留冗余姓名） */
+  personId: number | null
+  name: string
+  englishName: string | null
+  avatarUrl: string | null
+  department: string
+  job: string
+  /** 饰演角色；非演员为 null */
+  character: string | null
+}
+
+/** 单部作品的完整演职员表：演员与职员分开，便于前台分组展示。 */
+export interface PublicTitleCredits {
+  id: number
+  contentType: 'movie' | 'series'
+  /** 演员（department = Acting），按署名顺序 */
+  cast: PublicCreditEntry[]
+  /** 职员（导演 / 编剧 / 制片等），按署名顺序 */
+  crew: PublicCreditEntry[]
+}
+
+/** 影人基础资料。 */
+export interface PublicPerson {
+  id: number
+  name: string
+  englishName: string | null
+  gender: string
+  avatarUrl: string | null
+  birthday: string | null
+  deathday: string | null
+  placeOfBirth: string | null
+  nationality: string | null
+  school: string | null
+  knownFor: string
+  /** 简介：中文优先，缺失回退英文 */
+  biography: string | null
+}
+
+/** 影人参演 / 参与制作的一部作品。 */
+export interface PublicPersonCredit {
+  titleId: number
+  contentType: 'movie' | 'series'
+  title: string
+  chineseTitle: string | null
+  englishTitle: string | null
+  releaseYear: number | null
+  posterUrl: string | null
+  playUrl: string | null
+  rating: number | null
+  job: string
+  department: string
+  character: string | null
+}
+
+export interface PublicPersonDetail extends PublicPerson {
+  credits: PublicPersonCredit[]
 }
 
 export interface PublicCollectionDetail {
@@ -215,6 +275,29 @@ function normalizeCards(raw: Json): PublicCarouselCard[] {
     .filter((card): card is PublicCarouselCard => card !== null)
 }
 
+/** 演职员署名：姓名缺失即视为脏数据丢弃。 */
+function normalizeCreditEntry(raw: Json): PublicCreditEntry | null {
+  if (!isRecord(raw)) return null
+  const name = text(raw.name)
+  if (!name) return null
+  return {
+    personId: num(raw.personId),
+    name,
+    englishName: text(raw.englishName),
+    avatarUrl: text(raw.avatarUrl),
+    department: text(raw.department) ?? '',
+    job: text(raw.job) ?? '',
+    character: text(raw.character),
+  }
+}
+
+function normalizeCreditEntries(raw: Json): PublicCreditEntry[] {
+  if (!Array.isArray(raw)) return []
+  return raw
+    .map(normalizeCreditEntry)
+    .filter((entry): entry is PublicCreditEntry => entry !== null)
+}
+
 /** 进度条目：卡片摘要必须合法，进度字段缺失即视为脏数据丢弃。 */
 function normalizeProgress(raw: Json): PublicWatchProgress | null {
   if (!isRecord(raw)) return null
@@ -256,6 +339,9 @@ function unwrap(payload: Json): Record<string, Json> {
 /** 后端地址；开发期由 .env 的 VITE_API_BASE_URL 指定（如 http://127.0.0.1:8790） */
 const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/+$/, '')
 
+/** App 级密钥；与 `server/.env` 的 APP_API_KEY 一致，经 `x-app-key` 头携带。 */
+const APP_API_KEY = import.meta.env.VITE_APP_API_KEY ?? ''
+
 interface RequestOptions {
   method?: 'GET' | 'PUT' | 'DELETE'
   body?: unknown
@@ -266,6 +352,7 @@ interface RequestOptions {
 
 async function requestJson(path: string, options: RequestOptions = {}): Promise<Json> {
   const headers: Record<string, string> = { accept: 'application/json' }
+  if (APP_API_KEY) headers['x-app-key'] = APP_API_KEY
   if (options.body !== undefined) headers['content-type'] = 'application/json'
   if (options.device) headers['x-device-id'] = getDeviceId()
 
@@ -365,6 +452,78 @@ export async function fetchTitleDetail(
         })
       : [],
     updatedAt: text(raw.updatedAt) ?? '',
+  }
+}
+
+/** 影片 / 剧集完整演职员表（演员与职员分组）。 */
+export async function fetchTitleCredits(
+  id: number,
+  signal?: AbortSignal,
+): Promise<PublicTitleCredits> {
+  const body = unwrap(await getJson(`/public/titles/${id}/credits`, signal))
+  if (!isRecord(body.credits)) throw new PublicApiError('响应缺少 credits 字段', 'contract')
+  const raw = body.credits
+
+  const creditsId = num(raw.id)
+  if (creditsId === null) throw new PublicApiError('credits 字段结构非法', 'contract')
+
+  return {
+    id: creditsId,
+    contentType: raw.contentType === 'series' ? 'series' : 'movie',
+    cast: normalizeCreditEntries(raw.cast),
+    crew: normalizeCreditEntries(raw.crew),
+  }
+}
+
+/** 影人资料 + 参演作品（按年份倒序）。 */
+export async function fetchPersonDetail(
+  id: number,
+  signal?: AbortSignal,
+): Promise<PublicPersonDetail> {
+  const body = unwrap(await getJson(`/public/people/${id}`, signal))
+  if (!isRecord(body.person)) throw new PublicApiError('响应缺少 person 字段', 'contract')
+  const raw = body.person
+
+  const personId = num(raw.id)
+  const name = text(raw.name)
+  if (personId === null || !name) throw new PublicApiError('person 字段结构非法', 'contract')
+
+  return {
+    id: personId,
+    name,
+    englishName: text(raw.englishName),
+    gender: text(raw.gender) ?? 'unknown',
+    avatarUrl: text(raw.avatarUrl),
+    birthday: text(raw.birthday),
+    deathday: text(raw.deathday),
+    placeOfBirth: text(raw.placeOfBirth),
+    nationality: text(raw.nationality),
+    school: text(raw.school),
+    knownFor: text(raw.knownFor) ?? '',
+    biography: text(raw.biography),
+    credits: Array.isArray(raw.credits)
+      ? raw.credits.filter(isRecord).flatMap((entry) => {
+          const titleId = num(entry.titleId)
+          const titleName = text(entry.title)
+          if (titleId === null || !titleName) return []
+          return [
+            {
+              titleId,
+              contentType: entry.contentType === 'series' ? ('series' as const) : ('movie' as const),
+              title: titleName,
+              chineseTitle: text(entry.chineseTitle),
+              englishTitle: text(entry.englishTitle),
+              releaseYear: num(entry.releaseYear),
+              posterUrl: text(entry.posterUrl),
+              playUrl: text(entry.playUrl),
+              rating: num(entry.rating),
+              job: text(entry.job) ?? '',
+              department: text(entry.department) ?? '',
+              character: text(entry.character),
+            },
+          ]
+        })
+      : [],
   }
 }
 

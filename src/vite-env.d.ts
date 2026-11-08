@@ -1,8 +1,10 @@
 /// <reference types="vite/client" />
 
 interface ImportMetaEnv {
-  /** moive-database-op 只读接口基址，如 http://127.0.0.1:8790；留空则用同源 */
+  /** Vidday 后台服务基址（server/），如 http://127.0.0.1:8790；留空则用同源 */
   readonly VITE_API_BASE_URL?: string
+  /** App 级密钥；须与 server/.env 的 APP_API_KEY 一致，经 x-app-key 头携带 */
+  readonly VITE_APP_API_KEY?: string
   /** 中插广告总开关，仅显式 'false' 时关闭 */
   readonly VITE_ENABLE_ADS?: string
 }

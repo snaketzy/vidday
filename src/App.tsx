@@ -9,6 +9,7 @@ import { HomePage } from '@/pages/home-page'
 import { LoginPage } from '@/pages/login-page'
 import { MyListPage } from '@/pages/my-list-page'
 import { NotFoundPage } from '@/pages/not-found-page'
+import { PersonPage } from '@/pages/person-page'
 import { PlaybackLinesPage } from '@/pages/playback-lines-page'
 import { ProfilesPage } from '@/pages/profiles-page'
 import { SearchPage } from '@/pages/search-page'
@@ -50,6 +51,7 @@ export function App() {
               <Route path="/" element={<HomePage />} />
               <Route path="/browse" element={<BrowsePage />} />
               <Route path="/title/:id" element={<TitleDetailPage />} />
+              <Route path="/person/:id" element={<PersonPage />} />
               <Route path="/collection/:id" element={<CollectionPage />} />
               <Route path="/search" element={<SearchPage />} />
               <Route path="/my-list" element={<MyListPage />} />
