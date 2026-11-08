@@ -10,6 +10,16 @@ files:
   - electron/dist/**
   - package.json
 
+# 打包期翻转 Electron fuses：写入 Electron 二进制、由代码签名保护，运行期无法回改。
+# 仅在正式包生效，开发用的 node_modules/electron 二进制不受影响。
+electronFuses:
+  # 封堵 ELECTRON_RUN_AS_NODE=1 把应用二进制当纯 Node 解释器运行
+  runAsNode: false
+  # 丢弃 --inspect / --inspect-brk 等主进程调试开关，并禁用 SIGUSR1 打开 inspector
+  enableNodeCliInspectArguments: false
+  # 丢弃 NODE_OPTIONS / NODE_EXTRA_CA_CERTS，堵住 NODE_OPTIONS=--inspect 这条等价路径
+  enableNodeOptionsEnvironmentVariable: false
+
 # 内置代理内核与定制线路随包分发到 Contents/Resources/
 extraResources:
   - from: resources

@@ -1,4 +1,14 @@
-import { app, BrowserWindow, net, protocol, screen, session, shell } from 'electron'
+import {
+  app,
+  BrowserWindow,
+  Menu,
+  type MenuItemConstructorOptions,
+  net,
+  protocol,
+  screen,
+  session,
+  shell,
+} from 'electron'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -11,6 +21,38 @@ import {
   setupProxy,
   teardownProxy,
 } from './proxy'
+
+/**
+ * 生产包内摘除调试相关的启动开关。
+ * 这些开关属于浏览器进程级别，不经过 webPreferences.devTools 即可挂上调试器读取网络请求与内存，
+ * 且 Chromium 启动时就会读取，所以必须在模块顶层同步执行（早于 app ready）。
+ */
+function stripDebugSwitches(): void {
+  if (!app.isPackaged) return
+  for (const name of ['remote-debugging-port', 'remote-debugging-pipe']) {
+    if (app.commandLine.hasSwitch(name)) app.commandLine.removeSwitch(name)
+  }
+}
+
+stripDebugSwitches()
+
+/**
+ * 生产包内收窄 macOS 应用菜单：只保留 App / 编辑 / 窗口三项。
+ * 直接 setApplicationMenu(null) 会一并摘掉 Cmd+C/V/X/A/Z 等系统编辑快捷键，
+ * 因此这里保留编辑菜单；同时去掉 View（重新加载 / 缩放 / 开发者工具）与 Help，减少可探测面。
+ * 开发环境保持 Electron 默认菜单，便于使用 Cmd+Option+I 等调试快捷键。
+ */
+function setupApplicationMenu(): void {
+  if (!app.isPackaged) return
+
+  const template: MenuItemConstructorOptions[] = [
+    { role: 'appMenu' },
+    { role: 'editMenu' },
+    { role: 'windowMenu' },
+  ]
+
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template))
+}
 
 /**
  * 渲染层走自定义协议而非 file://：
@@ -86,6 +128,8 @@ async function createWindow(): Promise<void> {
       contextIsolation: true,
       sandbox: true,
       nodeIntegration: false,
+      // 生产包内彻底关闭渲染进程 DevTools，避免终端用户直接查看网络请求与播放器内存
+      devTools: !app.isPackaged,
     },
   })
 
@@ -128,6 +172,7 @@ if (!gotLock) {
   })
 
   app.whenReady().then(async () => {
+    setupApplicationMenu()
     registerAppProtocol()
     registerProxyIpc()
     await createWindow()
