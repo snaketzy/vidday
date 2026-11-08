@@ -6,34 +6,8 @@ export interface WatchState {
   progress: WatchProgress[]
 }
 
-const MINUTE = 60
-
 const initialState: WatchState = {
-  progress: [
-    {
-      titleId: 'shadow-city',
-      percent: 42,
-      position: 3226,
-      duration: 128 * MINUTE,
-      updatedAt: new Date(Date.now() - 1000 * 60 * 90).toISOString(),
-    },
-    {
-      titleId: 'neon-detective',
-      episodeId: 'neon-detective-s1e3',
-      percent: 15,
-      position: 441,
-      duration: 49 * MINUTE,
-      updatedAt: new Date(Date.now() - 1000 * 60 * 60 * 26).toISOString(),
-    },
-    {
-      titleId: 'blue-whale',
-      episodeId: 'blue-whale-s1e1',
-      percent: 68,
-      position: 1714,
-      duration: 42 * MINUTE,
-      updatedAt: new Date(Date.now() - 1000 * 60 * 60 * 50).toISOString(),
-    },
-  ],
+  progress: [],
 }
 
 const watchSlice = createSlice({

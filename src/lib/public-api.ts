@@ -1,11 +1,15 @@
 /**
- * moive-database-op 对外只读接口客户端。
+ * moive-database-op 对外接口客户端。
  *
  * 契约面刻意收窄：前端只消费轻量卡片 / 详情 DTO，不感知后端内部模型。
  * 由于两个项目不同仓库、无法共享类型，这里镜像一份契约类型，
  * 并对响应做窄校验（schemaVersion + 逐字段归一），
  * 后端字段漂移时宁可丢弃单项、也不让错误数据流进 UI。
+ *
+ * 内容侧为只读；观看进度 / 我的片单为设备归属的可写端点，
+ * 以 `X-Device-Id` 标识设备（见 `@/lib/device-id`）。
  */
+import { getDeviceId } from '@/lib/device-id'
 
 /**
  * 与后端 `PUBLIC_SCHEMA_VERSION` 必须一致，不一致直接拒绝响应。
@@ -101,6 +105,33 @@ export interface PublicLatest {
   items: PublicCarouselCard[]
 }
 
+/**
+ * 观看进度条目：卡片摘要叠加进度字段。
+ * 后端随进度一并下发卡片，前台启动时可据此重建目录条目（catalog 不持久化）。
+ */
+export interface PublicWatchProgress extends PublicCarouselCard {
+  /** 剧集单集 id；影片为 null */
+  episodeId: number | null
+  /** 已观看秒数 */
+  position: number
+  /** 总时长（秒） */
+  duration: number
+  /** 进度百分比 0-100 */
+  percent: number
+  updatedAt: string
+}
+
+/** 写入进度的请求体：幂等 upsert，按 updatedAt 判定是否覆盖。 */
+export interface PublicProgressUpsert {
+  titleId: number
+  episodeId?: number | null
+  position: number
+  duration: number
+  percent: number
+  /** 客户端记录时间（ISO）；缺省时以服务端时间为准 */
+  updatedAt?: string
+}
+
 export type PublicApiErrorKind = 'network' | 'http' | 'contract'
 
 export class PublicApiError extends Error {
@@ -184,6 +215,25 @@ function normalizeCards(raw: Json): PublicCarouselCard[] {
     .filter((card): card is PublicCarouselCard => card !== null)
 }
 
+/** 进度条目：卡片摘要必须合法，进度字段缺失即视为脏数据丢弃。 */
+function normalizeProgress(raw: Json): PublicWatchProgress | null {
+  if (!isRecord(raw)) return null
+  const card = normalizeCard(raw)
+  const position = num(raw.position)
+  const duration = num(raw.duration)
+  const percent = num(raw.percent)
+  const updatedAt = text(raw.updatedAt)
+  if (!card || position === null || duration === null || percent === null || !updatedAt) return null
+  return {
+    ...card,
+    episodeId: num(raw.episodeId),
+    position,
+    duration,
+    percent,
+    updatedAt,
+  }
+}
+
 /** 校验根对象并取出 schemaVersion 一致的响应体。 */
 function unwrap(payload: Json): Record<string, Json> {
   if (!isRecord(payload)) {
@@ -206,12 +256,26 @@ function unwrap(payload: Json): Record<string, Json> {
 /** 后端地址；开发期由 .env 的 VITE_API_BASE_URL 指定（如 http://127.0.0.1:8790） */
 const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/+$/, '')
 
-async function getJson(path: string, signal?: AbortSignal): Promise<Json> {
+interface RequestOptions {
+  method?: 'GET' | 'PUT' | 'DELETE'
+  body?: unknown
+  signal?: AbortSignal
+  /** 用户侧数据端点需携带 `X-Device-Id` 标识归属设备 */
+  device?: boolean
+}
+
+async function requestJson(path: string, options: RequestOptions = {}): Promise<Json> {
+  const headers: Record<string, string> = { accept: 'application/json' }
+  if (options.body !== undefined) headers['content-type'] = 'application/json'
+  if (options.device) headers['x-device-id'] = getDeviceId()
+
   let response: Response
   try {
     response = await fetch(`${API_BASE}/api${path}`, {
-      headers: { accept: 'application/json' },
-      signal,
+      method: options.method ?? 'GET',
+      headers,
+      body: options.body === undefined ? undefined : JSON.stringify(options.body),
+      signal: options.signal,
     })
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') throw error
@@ -227,6 +291,10 @@ async function getJson(path: string, signal?: AbortSignal): Promise<Json> {
   } catch {
     throw new PublicApiError('响应不是合法 JSON', 'contract')
   }
+}
+
+function getJson(path: string, signal?: AbortSignal): Promise<Json> {
+  return requestJson(path, { signal })
 }
 
 /** 页面轮播：首页 `home`；专题页 `collection` + pageId。 */
@@ -355,4 +423,43 @@ export async function fetchLatest(
     total: num(body.total) ?? 0,
     items: normalizeCards(body.items),
   }
+}
+
+/* ------------------------------------------------------------------ *
+ * 用户侧数据：观看进度 / 我的片单（以 `X-Device-Id` 归属，可写）
+ * ------------------------------------------------------------------ */
+
+/** 本人全部观看进度（含卡片摘要），按最近更新倒序。 */
+export async function fetchProgress(signal?: AbortSignal): Promise<PublicWatchProgress[]> {
+  const body = unwrap(await requestJson('/public/progress', { device: true, signal }))
+  if (!Array.isArray(body.items)) return []
+  return body.items
+    .map(normalizeProgress)
+    .filter((item): item is PublicWatchProgress => item !== null)
+}
+
+/** 写入单条进度（幂等 upsert，仅在不早于库内 updatedAt 时覆盖）。 */
+export async function putProgress(input: PublicProgressUpsert): Promise<void> {
+  await requestJson('/public/progress', { method: 'PUT', device: true, body: input })
+}
+
+/** 删除单条进度（「继续观看」的移除操作）。 */
+export async function deleteProgress(titleId: number): Promise<void> {
+  await requestJson(`/public/progress/${titleId}`, { method: 'DELETE', device: true })
+}
+
+/** 我的片单（含卡片摘要），按加入时间倒序。 */
+export async function fetchMyList(signal?: AbortSignal): Promise<PublicCarouselCard[]> {
+  const body = unwrap(await requestJson('/public/list', { device: true, signal }))
+  return normalizeCards(body.items)
+}
+
+/** 加入片单（重复加入幂等）。 */
+export async function addToMyList(titleId: number): Promise<void> {
+  await requestJson('/public/list', { method: 'PUT', device: true, body: { titleId } })
+}
+
+/** 移出片单。 */
+export async function removeFromMyList(titleId: number): Promise<void> {
+  await requestJson(`/public/list/${titleId}`, { method: 'DELETE', device: true })
 }

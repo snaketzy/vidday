@@ -3,7 +3,6 @@ import { Link } from 'react-router'
 import { BrandLogo } from '@/components/brand-logo'
 import { Button } from '@/components/ui/button'
 import { genreName } from '@/data/genres'
-import { HOME_RAILS } from '@/data/rails'
 
 const HOT_GENRES = ['suspense', 'scifi', 'crime', 'comedy', 'animation', 'doc']
 
@@ -39,9 +38,6 @@ export function NotFoundPage() {
             </Link>
           ))}
         </div>
-        <p className="mt-8 text-xs text-white/25">
-          首页共有 {HOME_RAILS.length} 个推荐片单，包含原创、新上线与各题材精选。
-        </p>
       </div>
     </div>
   )

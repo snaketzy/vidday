@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { cn } from 'cn'
-import { Bell, ChevronDown, LogOut, Menu, Search, Settings, Users, Wifi } from 'lucide-react'
+import { ChevronDown, LogOut, Menu, Search, Settings, Users, Wifi } from 'lucide-react'
 import { Link, NavLink, useLocation, useNavigate, useSearchParams } from 'react-router'
 
 import { BrandLogo } from '@/components/brand-logo'
@@ -16,7 +16,6 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from '@/components/ui/sheet'
-import { notifications } from '@/data/notifications'
 import { LATEST_WINDOW_DAYS } from '@/hooks/use-latest-titles'
 import { useGenres } from '@/hooks/use-genres'
 import { matchesKeyword } from '@/lib/catalog'
@@ -251,48 +250,6 @@ export function SiteHeader() {
               ) : null}
             </div>
           </div>
-
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label="通知"
-                className="relative text-white hover:bg-white/10"
-              >
-                <Bell className="size-5" />
-                <span className="absolute right-1.5 top-1.5 flex size-4 items-center justify-center rounded-full bg-brand text-[10px] font-bold text-white">
-                  {notifications.length}
-                </span>
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent
-              align="end"
-              className="w-80 border-white/10 bg-[#181818] text-white"
-            >
-              <DropdownMenuLabel className="text-xs uppercase tracking-widest text-white/45">
-                通知
-              </DropdownMenuLabel>
-              <DropdownMenuSeparator className="bg-white/10" />
-              {notifications.map((item) => (
-                <DropdownMenuItem key={item.id} asChild>
-                  <Link to={`/title/${item.titleId}`} className="flex cursor-pointer items-start gap-3 py-2">
-                    <ArtImage
-                      src={avatarArt(item.art)}
-                      alt={item.headline}
-                      paletteId={item.id}
-                      className="size-12 shrink-0 rounded-sm"
-                    />
-                    <span className="min-w-0 flex-1">
-                      <span className="block text-sm text-white/90">{item.headline}</span>
-                      <span className="mt-0.5 block text-[11px] leading-snug text-white/50">{item.detail}</span>
-                      <span className="mt-1 block text-[10px] text-white/35">{item.time}</span>
-                    </span>
-                  </Link>
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
 
           <DropdownMenu>
             <DropdownMenuTrigger asChild>

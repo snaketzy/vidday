@@ -4,6 +4,7 @@ import { Provider } from 'react-redux'
 import { BrowserRouter } from 'react-router'
 
 import { App } from '@/App'
+import { hydrateUserData } from '@/lib/user-sync'
 import { store } from '@/store'
 
 import '@/styles/globals.css'
@@ -20,3 +21,7 @@ createRoot(container).render(
     </Provider>
   </StrictMode>,
 )
+
+/** 启动水合：拉取服务端观看进度 / 我的片单，与本地合并并回推增量 */
+void hydrateUserData(store.dispatch, store.getState)
+

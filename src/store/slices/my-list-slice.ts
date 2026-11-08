@@ -7,7 +7,7 @@ export interface MyListState {
 }
 
 const initialState: MyListState = {
-  ids: ['deep-current', 'the-algorithm'],
+  ids: [],
 }
 
 const myListSlice = createSlice({

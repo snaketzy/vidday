@@ -1,6 +1,5 @@
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit'
 
-import { titles as allTitles } from '@/data/titles'
 import {
   defaultFilters,
   filterTitles,
@@ -20,7 +19,7 @@ export interface CatalogState {
 }
 
 const initialState: CatalogState = {
-  titles: allTitles,
+  titles: [],
   keyword: '',
   filters: defaultFilters,
 }
@@ -50,7 +49,7 @@ const catalogSlice = createSlice({
     resetFilters(state) {
       state.filters = defaultFilters
     },
-    /** 合并后端下发的影片：同 id 覆盖，新 id 追加（mock 与真实库 id 不冲突）。 */
+    /** 合并后端下发的影片：同 id 覆盖，新 id 追加。 */
     upsertTitles(state, action: PayloadAction<Title[]>) {
       for (const incoming of action.payload) {
         const index = state.titles.findIndex((title) => title.id === incoming.id)

@@ -41,6 +41,7 @@ import {
 import { Slider } from '@/components/ui/slider'
 import { formatTime } from '@/lib/format'
 import { titleBackdrop } from '@/lib/title-art'
+import { reportProgress } from '@/lib/user-sync'
 import { useAppDispatch, useAppSelector } from '@/store/hooks'
 import {
   DEFAULT_QUALITY,
@@ -96,6 +97,9 @@ const PGS_KEY_PREFIX = 'pgs:'
  */
 const RETRY_BASE_DELAY_MS = 800
 const RETRY_MAX_DELAY_MS = 12000
+
+/** 观看进度落库节流间隔（毫秒）：播放中每 15s 上报一次，暂停 / 离开页面立即上报 */
+const PROGRESS_REPORT_INTERVAL_MS = 15_000
 
 /** Stats for nerds 是调试能力，仅在开发环境提供，生产构建下彻底不出现 */
 const STATS_FOR_NERDS_ENABLED = import.meta.env.DEV
@@ -497,6 +501,8 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
   const resumeRef = useRef(0)
   const playerRef = useRef(player)
   const progressRef = useRef(progress)
+  /** 进度上报函数：交给媒体事件（暂停 / 播完）回调，保证读到最新的节流闭包 */
+  const reportProgressRef = useRef<() => void>(() => {})
   const qualityRef = useRef(player.quality)
   const [episodesOpen, setEpisodesOpen] = useState(false)
   const [levels, setLevels] = useState<QualityLevel[]>([])
@@ -591,6 +597,35 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
       dispatch(endSession())
     }
   }, [dispatch, title.id, episode?.id, nominalDuration])
+
+  /* 观看进度落库：播放中每 15s 上报一次，暂停 / 播完 / 离开页面立即上报。
+     服务端按 updatedAt 幂等 upsert，重复上报不会覆盖更新的记录。 */
+  useEffect(() => {
+    const episodeId = episode?.id ?? null
+
+    const flush = () => {
+      const current = playerRef.current
+      if (current.duration <= 0 || current.position <= 3) return
+      reportProgress({
+        titleId: title.id,
+        episodeId,
+        position: current.position,
+        duration: current.duration,
+        percent: (current.position / current.duration) * 100,
+        updatedAt: new Date().toISOString(),
+      })
+    }
+    reportProgressRef.current = flush
+
+    const timer = window.setInterval(() => {
+      if (playerRef.current.isPlaying) flush()
+    }, PROGRESS_REPORT_INTERVAL_MS)
+
+    return () => {
+      window.clearInterval(timer)
+      flush()
+    }
+  }, [title.id, episode?.id])
 
   /* 装载 HLS：读取轨道信息并生成画质选项 */
   useEffect(() => {
@@ -997,8 +1032,14 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
     }
     const onLoadedMetadata = () => setMediaReady(true)
     const onPlay = () => dispatch(setPlaying(true))
-    const onPause = () => dispatch(setPlaying(false))
-    const onEnded = () => dispatch(markEnded())
+    const onPause = () => {
+      dispatch(setPlaying(false))
+      reportProgressRef.current()
+    }
+    const onEnded = () => {
+      dispatch(markEnded())
+      reportProgressRef.current()
+    }
     const onWaiting = () => dispatch(setBuffering(true))
     const onPlaying = () => dispatch(setBuffering(false))
     const onSeeked = () => dispatch(setBuffering(false))

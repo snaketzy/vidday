@@ -1,6 +1,7 @@
 import { configureStore } from '@reduxjs/toolkit'
 
-import { loadState, saveState } from '@/lib/storage'
+import { loadState, saveState, clearState } from '@/lib/storage'
+import { userSyncMiddleware } from '@/lib/user-sync'
 import type { Account } from '@/types'
 
 import authSlice, { type AuthState } from './slices/auth-slice'
@@ -11,6 +12,9 @@ import uiSlice from './slices/ui-slice'
 import watchSlice from './slices/watch-slice'
 
 const PERSIST_KEY = 'state'
+/** 本地存储结构版本：升级时清空旧缓存（含历史 mock 种子数据） */
+const STORAGE_VERSION = 2
+const VERSION_KEY = 'storage-version'
 
 type PersistedPlayer = Pick<
   PlayerState,
@@ -24,7 +28,17 @@ interface PersistedState {
   player?: PersistedPlayer
 }
 
+/** 存储版本落后时清空一次旧缓存，确保历史 mock 记录不会随持久化残留 */
+function purgeLegacyState() {
+  const version = loadState<number>(VERSION_KEY, 0)
+  if (version < STORAGE_VERSION) {
+    clearState(PERSIST_KEY)
+    saveState(VERSION_KEY, STORAGE_VERSION)
+  }
+}
+
 function buildPreloadedState() {
+  purgeLegacyState()
   const persisted = loadState<PersistedState>(PERSIST_KEY, {})
 
   const authBase = authSlice.getInitialState()
@@ -71,6 +85,7 @@ export const store = configureStore({
     player: playerSlice.reducer,
     ui: uiSlice.reducer,
   },
+  middleware: (getDefaultMiddleware) => getDefaultMiddleware().concat(userSyncMiddleware),
   preloadedState: buildPreloadedState(),
 })
 
