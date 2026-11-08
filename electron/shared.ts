@@ -26,6 +26,18 @@ export interface SubscriptionState {
   nodeCount: number
 }
 
+/** 出网看门狗的自动恢复状态，供开发环境观测"节点全失效后自动重拉配置"是否生效。 */
+export interface RecoveryState {
+  /** 本次会话内触发自动恢复的次数 */
+  count: number
+  /** 最近一次触发时间（ISO）；从未触发为 null */
+  lastAt: string | null
+  /** 下一次允许重试的时间（ISO）；无待重试为 null */
+  nextAt: string | null
+  /** 当前连续出网失败计数，达到阈值即触发恢复 */
+  consecutiveFailures: number
+}
+
 /** 代理运行时状态，渲染层通过 IPC 读取后展示在「线路」页。 */
 export interface ProxyStatus {
   /** 代理核心是否已就绪并接管了本应用流量 */
@@ -45,6 +57,8 @@ export interface ProxyStatus {
   lineCount: number
   /** 订阅拉取状态 */
   subscription: SubscriptionState
+  /** 自动恢复状态 */
+  recovery: RecoveryState
 }
 
 /** 代理节点概览（字段来自 mihomo /proxies API）。 */
@@ -66,4 +80,16 @@ export interface ProxyGroupView {
 export interface NodeDelay {
   name: string
   delay: number | null
+}
+
+/**
+ * 远端配置来源，由渲染层注册给主进程。
+ * 主进程据此拉取配置与订阅（走系统网络、绕开内核）——
+ * 「所有节点失败」时渲染层请求会走内核而不可达，只能由主进程发起。
+ */
+export interface ProxyConfigSource {
+  /** 后端基址（绝对地址），主地址在前、兜底在后 */
+  bases: string[]
+  /** App 级密钥，经 `x-app-key` 头携带 */
+  appKey: string
 }

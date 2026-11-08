@@ -32,8 +32,7 @@ function required(name: string, value: string | undefined): string {
 export const env = {
   serverRoot,
   port: Number(process.env.PORT ?? '') || 8790,
-  /**
-   * App 级密钥：前端与 Electron 各持一份，经 `x-app-key` 请求头携带。
+  /** App 级密钥：前端与 Electron 各持一份，经 `x-app-key` 请求头携带。
    * 必填——未配置时拒绝启动，防止接口在公网裸奔。
    */
   appKey: required('APP_API_KEY', process.env.APP_API_KEY),

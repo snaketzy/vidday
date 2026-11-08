@@ -205,6 +205,17 @@ export interface PublicProgressUpsert {
   updatedAt?: string
 }
 
+/**
+ * 远端配置来源：交给主进程拉取配置与订阅。
+ * 拉取需走系统网络、绕开内核，故只能由主进程发起。
+ */
+export interface ProxyConfigSource {
+  /** 后端基址（绝对地址），主地址在前、兜底在后 */
+  bases: string[]
+  /** App 级密钥 */
+  appKey: string
+}
+
 export type PublicApiErrorKind = 'network' | 'http' | 'contract'
 
 export class PublicApiError extends Error {
@@ -353,6 +364,15 @@ function unwrap(payload: Json): Record<string, Json> {
 /** 后端地址；开发期由 .env 的 VITE_API_BASE_URL 指定（如 http://127.0.0.1:8790） */
 const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/+$/, '')
 
+/**
+ * 兜底后端地址（逗号分隔）：主地址不可达时按序尝试，用于应对单个域名被封 / 故障。
+ * 仅供主进程拉取远端代理配置使用（见 `getProxyConfigSource`），不影响其它内容接口。
+ */
+const API_BASE_FALLBACKS = (import.meta.env.VITE_API_BASE_URL_FALLBACK ?? '')
+  .split(',')
+  .map((item) => item.trim().replace(/\/+$/, ''))
+  .filter(Boolean)
+
 /** App 级密钥；与 `server/.env` 的 APP_API_KEY 一致，经 `x-app-key` 头携带。 */
 const APP_API_KEY = import.meta.env.VITE_APP_API_KEY ?? ''
 
@@ -396,6 +416,15 @@ async function requestJson(path: string, options: RequestOptions = {}): Promise<
 
 function getJson(path: string, signal?: AbortSignal): Promise<Json> {
   return requestJson(path, { signal })
+}
+
+/**
+ * 组装远端代理配置的来源（后端基址 + app key），交给主进程拉取。
+ * 主地址不可达时主进程会按序尝试兜底地址；相对 / 同源地址对主进程无意义，故过滤空值。
+ */
+export function getProxyConfigSource(): ProxyConfigSource {
+  const bases = [API_BASE, ...API_BASE_FALLBACKS].filter((base) => base.length > 0)
+  return { bases, appKey: APP_API_KEY }
 }
 
 /** 页面轮播：首页 `home`；专题页 `collection` + pageId。 */

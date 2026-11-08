@@ -3,6 +3,8 @@
 interface ImportMetaEnv {
   /** Vidday 后台服务基址（server/），如 http://127.0.0.1:8790；留空则用同源 */
   readonly VITE_API_BASE_URL?: string
+  /** 兜底后端基址（逗号分隔）：主地址不可达时用于拉取代理远端配置 */
+  readonly VITE_API_BASE_URL_FALLBACK?: string
   /** App 级密钥；须与 server/.env 的 APP_API_KEY 一致，经 x-app-key 头携带 */
   readonly VITE_APP_API_KEY?: string
   /** 中插广告总开关，仅显式 'false' 时关闭 */
@@ -27,6 +29,18 @@ interface ViddaySubscriptionState {
   nodeCount: number
 }
 
+/** 出网看门狗的自动恢复状态，供开发环境观测。 */
+interface ViddayProxyRecovery {
+  /** 本次会话内触发自动恢复的次数 */
+  count: number
+  /** 最近一次触发时间（ISO）；从未触发为 null */
+  lastAt: string | null
+  /** 下一次允许重试的时间（ISO）；无待重试为 null */
+  nextAt: string | null
+  /** 当前连续出网失败计数 */
+  consecutiveFailures: number
+}
+
 /** 代理运行时状态。字段与 `electron/shared.ts` 的 ProxyStatus 对齐。 */
 interface ViddayProxyStatus {
   /** 代理核心是否已就绪并接管了本应用流量 */
@@ -43,12 +57,25 @@ interface ViddayProxyStatus {
   lineCount: number
   /** 订阅拉取状态 */
   subscription: ViddaySubscriptionState
+  /** 自动恢复状态 */
+  recovery: ViddayProxyRecovery
 }
 
 /** 代理节点概览。 */
 interface ViddayProxyNode {
   name: string
   type: string
+}
+
+/**
+ * 远端配置来源：交给主进程拉取配置与订阅。
+ * 拉取需走系统网络、绕开内核，故只能由主进程发起。
+ */
+interface ViddayProxyConfigSource {
+  /** 后端基址（绝对地址），主地址在前、兜底在后 */
+  bases: string[]
+  /** App 级密钥 */
+  appKey: string
 }
 
 /** 一个代理组及其节点。 */
@@ -76,8 +103,10 @@ interface ViddayBridge {
     refreshSubscription: () => Promise<ViddayProxyStatus>
     /** 当前生效的订阅地址（用户级配置优先） */
     getSubscription: () => Promise<string>
-    /** 保存新的订阅地址并重启内核 */
+    /** 保存新的订阅地址（单纯换地址走热重载，不重启内核） */
     setSubscription: (url: string) => Promise<ViddayProxyStatus>
+    /** 注册远端配置来源；主进程据此拉取配置，并在节点全失效时自动重拉热替换 */
+    setConfigSource: (source: ViddayProxyConfigSource) => Promise<void>
     groups: () => Promise<ViddayProxyGroup[]>
     /** 切换网络出口：true 走本机（系统）网络，false 走应用内置内核代理 */
     setHostNetwork: (enabled: boolean) => Promise<ViddayProxyStatus>

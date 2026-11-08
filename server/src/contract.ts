@@ -236,3 +236,14 @@ export interface PublicCollaboratorsResponse {
   personId: number
   collaborators: PublicCollaborator[]
 }
+
+/**
+ * 客户端内置代理的远端配置。
+ * 订阅地址改由服务端下发，客户端启动时拉取并在变更时热替换，
+ * 从而订阅地址失效 / 更换时无需发版、用户无感知。
+ */
+export interface PublicProxyConfigResponse {
+  schemaVersion: number
+  /** Clash 格式订阅地址；留空表示不下发，客户端保持现有配置 */
+  subscriptionUrl: string
+}

@@ -12,6 +12,9 @@ release
 # 本地线路配置含订阅 token，不入库
 resources/lines.json
 
+# 服务端运行时配置含订阅地址 token，不入库（示例见 proxy.config.example.json）
+server/proxy.config.json
+
 # mihomo 内核为运行时二进制（约 54MB），不入库，按需下载到 resources/mihomo/
 resources/mihomo/mihomo
 

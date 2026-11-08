@@ -17,6 +17,7 @@ import {
   type PublicListResponse,
   type PublicProgressResponse,
   type PublicProgressUpsert,
+  type PublicProxyConfigResponse,
   type PublicTitleCreditsResponse,
   type PublicTitleResponse,
   type PublicWatchProgress,
@@ -41,6 +42,7 @@ import {
   upsertProgress,
 } from '../db/user-data.ts'
 import { badRequest, notFound, requirePositiveInt, toIdParam } from '../http.ts'
+import { readAppConfig } from '../config.ts'
 
 /** 请求头：设备标识（前台首次启动生成 UUID 并持久化，作为用户侧数据的归属键）。 */
 const DEVICE_ID_HEADER = 'x-device-id'
@@ -123,6 +125,19 @@ export const publicRoutes: FastifyPluginAsync = async (app) => {
     const body: PublicGenreResponse = {
       schemaVersion: PUBLIC_SCHEMA_VERSION,
       genres: await listGenres(),
+    }
+    return body
+  })
+
+  /**
+   * 内置代理的远端配置：下发给客户端的订阅地址（读自 `proxy.config.json`）。
+   * 客户端启动时拉取，与本地不一致才推送主进程热替换；
+   * 订阅地址更换 / 失效时改配置文件即可即时生效，无需重启服务、更无需发版。
+   */
+  app.get('/proxy-config', async () => {
+    const body: PublicProxyConfigResponse = {
+      schemaVersion: PUBLIC_SCHEMA_VERSION,
+      subscriptionUrl: readAppConfig().proxySubscriptionUrl,
     }
     return body
   })

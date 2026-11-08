@@ -5,7 +5,15 @@ import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 
-import type { NodeDelay, ProxyGroupView, ProxyLine, ProxyStatus, SubscriptionState } from './shared'
+import type {
+  NodeDelay,
+  ProxyConfigSource,
+  ProxyGroupView,
+  ProxyLine,
+  ProxyStatus,
+  RecoveryState,
+  SubscriptionState,
+} from './shared'
 
 /**
  * 内置代理层，对标 Clash Verge 的内核托管方式：
@@ -50,6 +58,18 @@ const EXTERNAL_PROBE_TIMEOUT = 3000
 const PROBE_PARTITION = 'vidday-network-probe'
 /** 未显式配置时的订阅默认更新间隔（秒） */
 const DEFAULT_SUBSCRIPTION_INTERVAL = 3600
+/** 远端配置拉取超时 */
+const REMOTE_CONFIG_TIMEOUT = 5000
+/** 远端配置例行同步间隔（毫秒）：长时间驻留也能拿到最新订阅地址 */
+const REMOTE_CONFIG_INTERVAL = 30 * 60 * 1000
+/** 出网探测专用 session 的分区名（与启动探测区分，内存态） */
+const EGRESS_PROBE_PARTITION = 'vidday-egress-probe'
+/** 出网探测间隔（毫秒）：经内核验活，连续失败即触发配置重拉 */
+const EGRESS_PROBE_INTERVAL = 10_000
+/** 连续失败阈值：达到即判定「所有节点失效」 */
+const EGRESS_FAILURE_THRESHOLD = 3
+/** 恢复重试退避（毫秒）：1/2/4/8/16/30 分钟，封顶 30 分钟 */
+const RECOVERY_BACKOFF_MS = [60_000, 120_000, 240_000, 480_000, 960_000, 1_800_000]
 /** 按节点名称识别常见地区；mihomo 只会显示实际匹配到节点的组。 */
 const REGION_GROUPS = [
   { name: '香港节点', filter: '(?i)(香港|Hong Kong|(^|[| _-])HK($|[| _-])|HKG)' },
@@ -101,6 +121,21 @@ let controllerPort = DEFAULT_CONTROLLER_PORT
 let configDir = ''
 /** 订阅定时刷新句柄 */
 let refreshTimer: ReturnType<typeof setInterval> | null = null
+/** 远端配置来源（渲染层注册）；为空表示尚未注册，不能拉配置 */
+let configSource: ProxyConfigSource | null = null
+/** 远端配置例行同步句柄 */
+let remoteConfigTimer: ReturnType<typeof setInterval> | null = null
+/** 出网探测专用 session（经内核，验证真实出口） */
+let egressSession: Session | null = null
+/** 出网看门狗句柄 */
+let watchdogTimer: ReturnType<typeof setInterval> | null = null
+/** 连续出网失败计数 */
+let egressFailures = 0
+/** 恢复退避档位与下次可重试时间 */
+let recoveryBackoffIndex = 0
+let nextRecoveryAt = 0
+/** 恢复进行中标记，避免与看门狗重入 */
+let recovering = false
 
 const EMPTY_SUBSCRIPTION: SubscriptionState = {
   configured: false,
@@ -112,6 +147,17 @@ const EMPTY_SUBSCRIPTION: SubscriptionState = {
 
 let subscription = EMPTY_SUBSCRIPTION
 
+/**
+ * 看门狗的可观测状态。用同一对象引用挂在 status 上，
+ * 就地改字段即可让渲染层通过 IPC 看到最新值（供开发环境排查）。
+ */
+const recovery: RecoveryState = {
+  count: 0,
+  lastAt: null,
+  nextAt: null,
+  consecutiveFailures: 0,
+}
+
 let status: ProxyStatus = {
   enabled: false,
   hostNetwork: false,
@@ -120,6 +166,7 @@ let status: ProxyStatus = {
   controllerPort,
   lineCount: 0,
   subscription,
+  recovery,
 }
 
 /* ------------------------------------------------------------------ *
@@ -190,6 +237,14 @@ function writeEmptySubscription(): void {
 }
 
 /**
+ * 确保订阅文件存在，但绝不覆盖已有内容。
+ * 拉取失败时保留上一次成功的结果（last-known-good），避免订阅源抖动导致线路全空。
+ */
+function ensureSubscriptionFile(): void {
+  if (!existsSync(subscriptionFilePath())) writeEmptySubscription()
+}
+
+/**
  * 由主进程拉取订阅并落盘。
  * 用 Node 原生 fetch（走系统网络），不经本应用自己的代理，避免与内核形成依赖环。
  */
@@ -205,7 +260,7 @@ async function fetchSubscription(config: LinesConfig): Promise<SubscriptionState
       signal: controller.signal,
     })
     if (!response.ok) {
-      writeEmptySubscription()
+      ensureSubscriptionFile()
       const suffix = response.statusText ? ` ${response.statusText}` : ''
       return {
         configured: true,
@@ -217,7 +272,7 @@ async function fetchSubscription(config: LinesConfig): Promise<SubscriptionState
     }
     const text = await response.text()
     if (!text.trim()) {
-      writeEmptySubscription()
+      ensureSubscriptionFile()
       return {
         configured: true,
         ok: false,
@@ -236,7 +291,7 @@ async function fetchSubscription(config: LinesConfig): Promise<SubscriptionState
       nodeCount: subscription.nodeCount,
     }
   } catch (error) {
-    writeEmptySubscription()
+    ensureSubscriptionFile()
     const aborted = error instanceof Error && error.name === 'AbortError'
     const reason = aborted
       ? '订阅拉取超时'
@@ -324,7 +379,8 @@ function buildConfig(config: LinesConfig): { text: string; hasNodes: boolean } {
       return group
     }
     const groups: Record<string, unknown>[] = [
-      withSources({ name: MANUAL_GROUP, type: 'select' }),
+      // 「自动选择」置顶：PROXY_GROUP 是 select 组，默认选中 proxies 第一项，
+      // 因此排在首位即代表默认走自动选最优节点；用户手选后由 store-selected 记住。
       withSources({
         name: AUTO_GROUP,
         type: 'url-test',
@@ -332,6 +388,7 @@ function buildConfig(config: LinesConfig): { text: string; hasNodes: boolean } {
         interval: 300,
         tolerance: 50,
       }),
+      withSources({ name: MANUAL_GROUP, type: 'select' }),
       withSources({
         name: FALLBACK_GROUP,
         type: 'fallback',
@@ -485,8 +542,21 @@ export async function setupProxy(): Promise<ProxyStatus> {
   else if (hasNodes) reason = '已启用'
   else reason = '已启用（无线路，走 DIRECT）'
 
-  status = { enabled: ready, hostNetwork, reason, mixedPort, controllerPort, lineCount, subscription }
+  status = {
+    enabled: ready,
+    hostNetwork,
+    reason,
+    mixedPort,
+    controllerPort,
+    lineCount,
+    subscription,
+    recovery,
+  }
   startRefreshTimer(config.subscriptionUrl ? (config.subscriptionInterval ?? DEFAULT_SUBSCRIPTION_INTERVAL) : 0)
+  if (ready) {
+    startRemoteConfigSync()
+    startWatchdog()
+  }
   return status
 }
 
@@ -547,12 +617,181 @@ function startRefreshTimer(intervalSeconds: number): void {
   }, intervalSeconds * 1000)
 }
 
+/* ------------------------------------------------------------------ *
+ * 远端配置同步与出网看门狗
+ * ------------------------------------------------------------------ */
+
+/**
+ * 拉取远端订阅地址。
+ *
+ * 必须用 Node 原生 fetch（走系统网络），**不能**经由本应用的内核代理——
+ * 否则「所有节点失效」时连配置都拉不到，陷入「节点挂 → 拉不到配置 → 换不了节点」的死锁。
+ * 返回 null 表示所有来源都失败（调用方保持现状），空串表示服务端未下发。
+ */
+async function fetchRemoteSubscriptionUrl(): Promise<string | null> {
+  const source = configSource
+  if (!source || source.bases.length === 0) return null
+
+  for (const base of source.bases) {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), REMOTE_CONFIG_TIMEOUT)
+    try {
+      const headers: Record<string, string> = { accept: 'application/json' }
+      if (source.appKey) headers['x-app-key'] = source.appKey
+      const response = await fetch(`${base}/api/public/proxy-config`, {
+        headers,
+        signal: controller.signal,
+      })
+      if (!response.ok) continue
+      const data = (await response.json()) as { subscriptionUrl?: unknown }
+      if (typeof data.subscriptionUrl === 'string') return data.subscriptionUrl.trim()
+    } catch {
+      // 该来源不可达，尝试下一个兜底地址
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+  return null
+}
+
+/**
+ * 同步远端配置：订阅地址变化时热替换（不重启内核）。返回是否发生变更。
+ * 地址未变或拉取失败均返回 false，交由调用方决定是否再拉一次订阅。
+ */
+async function syncRemoteProxyConfig(): Promise<boolean> {
+  const url = await fetchRemoteSubscriptionUrl()
+  if (url === null || url === '') return false
+
+  const current = (readConfig().subscriptionUrl ?? '').trim()
+  if (url === current) return false
+
+  writeUserConfig({ subscriptionUrl: url })
+  if (!status.enabled) return true
+  if (current) {
+    // 已有订阅 → provider 段不变，热重载即可，不中断播放
+    await refreshSubscription()
+    return true
+  }
+  // 从无到有 → provider 段新增，需重启内核
+  teardownProxy()
+  await setupProxy()
+  return true
+}
+
+/** 按间隔例行同步远端配置，保证长时间驻留也能拿到最新订阅地址。 */
+function startRemoteConfigSync(): void {
+  if (remoteConfigTimer) {
+    clearInterval(remoteConfigTimer)
+    remoteConfigTimer = null
+  }
+  if (!configSource) return
+  remoteConfigTimer = setInterval(() => {
+    void syncRemoteProxyConfig()
+  }, REMOTE_CONFIG_INTERVAL)
+}
+
+function stopRemoteConfigSync(): void {
+  if (remoteConfigTimer) {
+    clearInterval(remoteConfigTimer)
+    remoteConfigTimer = null
+  }
+}
+
+/** 经内核探测外网可达性：独立 session 指向混合端口，验证的是真实出口。 */
+async function probeEgress(): Promise<boolean> {
+  try {
+    egressSession ??= session.fromPartition(EGRESS_PROBE_PARTITION)
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), EXTERNAL_PROBE_TIMEOUT)
+    try {
+      const response = await egressSession.fetch(EXTERNAL_PROBE_URL, { signal: controller.signal })
+      return response.status === 204
+    } finally {
+      clearTimeout(timer)
+    }
+  } catch {
+    return false
+  }
+}
+
+/**
+ * 看门狗：内置代理接管中，若经代理出网连续失败，判定「所有节点失效」，
+ * 自动重拉远端配置与订阅并热替换；仍不行则按指数退避稍后重试。
+ */
+async function watchdogTick(): Promise<void> {
+  // 未启用内核 / 走本机网络 / 未配置订阅时不适用：此时看门狗没有「可恢复」的目标
+  if (!status.enabled || status.hostNetwork || !status.subscription.configured) {
+    egressFailures = 0
+    recovery.consecutiveFailures = 0
+    return
+  }
+  if (recovering) return
+
+  if (await probeEgress()) {
+    egressFailures = 0
+    recovery.consecutiveFailures = 0
+    recovery.nextAt = null
+    recoveryBackoffIndex = 0
+    nextRecoveryAt = 0
+    return
+  }
+
+  egressFailures += 1
+  recovery.consecutiveFailures = egressFailures
+  if (egressFailures < EGRESS_FAILURE_THRESHOLD) return
+  if (Date.now() < nextRecoveryAt) return
+
+  recovering = true
+  egressFailures = 0
+  try {
+    const changed = await syncRemoteProxyConfig()
+    // 地址未变时也重拉一次订阅：可能只是订阅源 / 节点临时抖动
+    if (!changed && status.enabled) await refreshSubscription()
+  } catch {
+    // 恢复失败，按退避稍后重试
+  } finally {
+    const step = Math.min(recoveryBackoffIndex, RECOVERY_BACKOFF_MS.length - 1)
+    nextRecoveryAt = Date.now() + RECOVERY_BACKOFF_MS[step]
+    recoveryBackoffIndex = Math.min(recoveryBackoffIndex + 1, RECOVERY_BACKOFF_MS.length - 1)
+    recovery.count += 1
+    recovery.lastAt = new Date().toISOString()
+    recovery.nextAt = new Date(nextRecoveryAt).toISOString()
+    recovery.consecutiveFailures = 0
+    recovering = false
+  }
+}
+
+function startWatchdog(): void {
+  if (watchdogTimer) return
+  void (async () => {
+    egressSession ??= session.fromPartition(EGRESS_PROBE_PARTITION)
+    await egressSession.setProxy({
+      proxyRules: `socks5://127.0.0.1:${mixedPort}`,
+      proxyBypassRules: '<local>,localhost,127.0.0.1',
+    })
+  })()
+  watchdogTimer = setInterval(() => {
+    void watchdogTick()
+  }, EGRESS_PROBE_INTERVAL)
+}
+
+function stopWatchdog(): void {
+  if (watchdogTimer) {
+    clearInterval(watchdogTimer)
+    watchdogTimer = null
+  }
+  egressFailures = 0
+  recovery.consecutiveFailures = 0
+}
+
 /** 停止内核。 */
 export function teardownProxy(): void {
   if (refreshTimer) {
     clearInterval(refreshTimer)
     refreshTimer = null
   }
+  stopRemoteConfigSync()
+  stopWatchdog()
   if (core) {
     core.kill()
     core = null
@@ -630,9 +869,33 @@ export function registerProxyIpc(): void {
   // 当前生效的订阅地址（用户级配置优先）
   ipcMain.handle('proxy:get-subscription', (): string => readConfig().subscriptionUrl ?? '')
 
-  // 保存新的订阅地址并重启内核：地址变化可能新增/移除 provider 段，重启最稳妥
+  // 渲染层注册远端配置来源（后端地址 + app key）。主进程据此拉取配置与订阅：
+  // 拉取必须走系统网络、绕开内核，故只能由主进程发起。
+  ipcMain.handle(
+    'proxy:set-config-source',
+    (_event, source: ProxyConfigSource): void => {
+      configSource = {
+        bases: Array.isArray(source?.bases)
+          ? source.bases
+              .filter((base): base is string => typeof base === 'string' && base.trim().length > 0)
+              .map((base) => base.trim().replace(/\/+$/, ''))
+          : [],
+        appKey: typeof source?.appKey === 'string' ? source.appKey : '',
+      }
+      startRemoteConfigSync()
+      void syncRemoteProxyConfig()
+    },
+  )
+
+  // 保存新的订阅地址。仅当「有订阅 <-> 无订阅」切换（provider 段增删）时才重启内核；
+  // 单纯更换地址走热重载，不中断正在播放的内容，实现用户无感替换。
   ipcMain.handle('proxy:set-subscription', async (_event, url: string): Promise<ProxyStatus> => {
-    writeUserConfig({ subscriptionUrl: url.trim() })
+    const next = url.trim()
+    const hadSubscription = Boolean(readConfig().subscriptionUrl)
+    writeUserConfig({ subscriptionUrl: next })
+    if (status.enabled && hadSubscription === Boolean(next)) {
+      return refreshSubscription()
+    }
     teardownProxy()
     return setupProxy()
   })

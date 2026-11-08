@@ -50,6 +50,13 @@ function delayLabel(delay: number | null): string {
   return delay === null ? '超时' : `${delay} ms`
 }
 
+/** 把 ISO 时间格式化为本地 HH:mm:ss，便于观察看门狗触发时序。 */
+function formatClock(iso: string | null): string {
+  if (!iso) return '—'
+  const date = new Date(iso)
+  return Number.isNaN(date.getTime()) ? '—' : date.toLocaleTimeString('zh-CN', { hour12: false })
+}
+
 function protocolLabel(type: string): string {
   const normalized = type.toLowerCase()
   const labels: Record<string, string> = {
@@ -156,7 +163,7 @@ export function NetworkPanel() {
     setSavingSub(true)
     setDelays({})
     try {
-      // 保存后主进程会重启内核并按新地址重新拉取
+      // 保存后主进程会按新地址重新拉取；单纯换地址走热重载，不重启内核
       const nextStatus = await proxy.setSubscription(subUrl.trim())
       setStatus(nextStatus)
       setGroups(nextStatus.enabled ? await proxy.groups() : [])
@@ -301,13 +308,28 @@ export function NetworkPanel() {
     return left.name.localeCompare(right.name)
   })
 
-  const statusRows = [
+  const statusRows: { label: string; value: string; tone?: string }[] = [
     { label: '状态', value: status?.reason ?? '读取中…' },
     { label: '订阅', value: subValue, tone: sub && sub.configured && !sub.ok ? 'text-rose-300' : undefined },
     { label: '混合端口', value: status ? String(status.mixedPort) : '—' },
     { label: '控制端口', value: status ? String(status.controllerPort) : '—' },
     { label: '线路数量', value: status ? String(status.lineCount) : '—' },
   ]
+
+  // 仅开发版可见：暴露看门狗的自动恢复情况，便于验证「节点全失效 → 自动重拉配置」
+  if (import.meta.env.DEV) {
+    const recovery = status?.recovery
+    statusRows.push(
+      { label: '连续失败', value: recovery ? `${recovery.consecutiveFailures} / 3` : '—' },
+      {
+        label: '自动恢复',
+        value: recovery && recovery.count > 0 ? `${recovery.count} 次` : '未触发',
+        tone: recovery && recovery.count > 0 ? 'text-amber-300' : undefined,
+      },
+      { label: '最近恢复', value: formatClock(recovery?.lastAt ?? null) },
+      { label: '下次重试', value: formatClock(recovery?.nextAt ?? null) },
+    )
+  }
 
   const badgeTone = !status?.enabled
     ? 'bg-white/10 text-white/50'
@@ -412,7 +434,7 @@ export function NetworkPanel() {
             </Button>
           </div>
           <p className="mt-2 text-[11px] text-white/35">
-            保存后会重启内核并按新地址重新拉取；若地址不变、只想重试，点「刷新」即可。
+            保存后会按新地址重新拉取；单纯换地址走热重载，不重启内核。若地址不变、只想重试，点「刷新」即可。
           </p>
         </div>
       ) : null}

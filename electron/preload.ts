@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
-import type { NodeDelay, ProxyGroupView, ProxyStatus } from './shared'
+import type { NodeDelay, ProxyConfigSource, ProxyGroupView, ProxyStatus } from './shared'
 
 /**
  * 暴露给渲染层的最小桌面能力面，业务代码通过 `window.vidday` 访问。
@@ -20,6 +20,9 @@ const bridge = {
     getSubscription: (): Promise<string> => ipcRenderer.invoke('proxy:get-subscription'),
     setSubscription: (url: string): Promise<ProxyStatus> =>
       ipcRenderer.invoke('proxy:set-subscription', url),
+    /** 注册远端配置来源（后端地址 + app key）；主进程据此拉取配置并在节点全失效时自动重拉 */
+    setConfigSource: (source: ProxyConfigSource): Promise<void> =>
+      ipcRenderer.invoke('proxy:set-config-source', source),
     groups: (): Promise<ProxyGroupView[]> => ipcRenderer.invoke('proxy:groups'),
     /** 切换网络出口：true 走本机（系统）网络，false 走应用内置内核代理 */
     setHostNetwork: (enabled: boolean): Promise<ProxyStatus> =>
