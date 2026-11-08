@@ -18,7 +18,7 @@ const VERSION_KEY = 'storage-version'
 
 type PersistedPlayer = Pick<
   PlayerState,
-  'volume' | 'muted' | 'quality' | 'subtitle' | 'audio' | 'rate' | 'autoplayNext'
+  'volume' | 'muted' | 'subtitle' | 'audio' | 'rate' | 'autoplayNext'
 >
 
 interface PersistedState {
@@ -103,7 +103,6 @@ store.subscribe(() => {
       player: {
         volume: state.player.volume,
         muted: state.player.muted,
-        quality: state.player.quality,
         subtitle: state.player.subtitle,
         audio: state.player.audio,
         rate: state.player.rate,

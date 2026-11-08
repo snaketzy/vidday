@@ -95,6 +95,8 @@ const playerSlice = createSlice({
       state.isPlaying = true
       state.buffering = true
       state.controlsVisible = true
+      /** 每次装载新会话都回到默认画质，避免上一部影片的档位被沿用 */
+      state.quality = DEFAULT_QUALITY
     },
     endSession(state) {
       state.isPlaying = false
