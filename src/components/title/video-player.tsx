@@ -80,6 +80,10 @@ import type { Episode, Title } from '@/types'
  */
 const FALLBACK_SOURCE_URL = 'http://media.laybackzzz.com/HLS/tt0104257/HEVC/master.m3u8'
 const CONTROLS_TIMEOUT = 3200
+/** 上下键调音量的单步步长（5%） */
+const VOLUME_STEP = 0.05
+/** 音量调整状态层的停留时长 */
+const VOLUME_OSD_TIMEOUT = 1000
 
 /**
  * 外挂 PGS 字幕：远端在与 master 同级的 `pgs-subs/` 下放一份 index.json 清单。
@@ -520,6 +524,9 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
   const [adSkippable, setAdSkippable] = useState(false)
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
   const [statsVisible, setStatsVisible] = useState(false)
+  /** 音量调整状态层：按上下键时短暂显示，值为 0-1；null 表示隐藏 */
+  const [volumeOsd, setVolumeOsd] = useState<number | null>(null)
+  const volumeOsdTimer = useRef<number | undefined>(undefined)
   const setContainerRef = useCallback((element: HTMLDivElement | null) => {
     containerRef.current = element
     setMenuPortalContainer(element)
@@ -1116,6 +1123,26 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
     video.pause()
   }, [dispatch, startPlayback])
 
+  /** 音量步进：控制音量并唤出播放器上的音量状态层 */
+  const adjustVolume = useCallback(
+    (delta: number) => {
+      const current = playerRef.current.muted ? 0 : playerRef.current.volume
+      const next = Math.min(1, Math.max(0, Math.round((current + delta) * 100) / 100))
+      dispatch(setVolume(next))
+      setVolumeOsd(next)
+      if (volumeOsdTimer.current) window.clearTimeout(volumeOsdTimer.current)
+      volumeOsdTimer.current = window.setTimeout(() => setVolumeOsd(null), VOLUME_OSD_TIMEOUT)
+    },
+    [dispatch],
+  )
+
+  useEffect(
+    () => () => {
+      if (volumeOsdTimer.current) window.clearTimeout(volumeOsdTimer.current)
+    },
+    [],
+  )
+
   /** 跳转到指定时间点（秒） */
   const seekTo = useCallback(
     (seconds: number) => {
@@ -1295,6 +1322,14 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
         case 'ArrowLeft':
           seekRelative(-10)
           break
+        case 'ArrowUp':
+          event.preventDefault()
+          adjustVolume(VOLUME_STEP)
+          break
+        case 'ArrowDown':
+          event.preventDefault()
+          adjustVolume(-VOLUME_STEP)
+          break
         case 'm':
           dispatch(toggleMute())
           break
@@ -1311,7 +1346,7 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [closeContextMenu, contextMenu, dispatch, navigate, seekRelative, statsVisible, toggleFullscreen, togglePlayback, wake])
+  }, [adjustVolume, closeContextMenu, contextMenu, dispatch, navigate, seekRelative, statsVisible, toggleFullscreen, togglePlayback, wake])
 
   /* 播放结束：自动播放下一集 */
   useEffect(() => {
@@ -1321,6 +1356,8 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
 
   const VolumeIcon =
     player.muted || player.volume === 0 ? VolumeX : player.volume < 0.5 ? Volume1 : Volume2
+  /** 控制栏隐藏时同步隐藏鼠标指针（仅播放中，且非广告 / 结束遮罩态） */
+  const hideCursor = !player.controlsVisible && player.isPlaying && !player.ended && !adActive
   const episodeLabel = episode ? `第 ${episode.season} 季 第 ${episode.number} 集 · ${episode.title}` : null
   const autoSuffix =
     player.quality === 'auto' && liveHeight ? `（当前 ${heightLabel(liveHeight)}）` : ''
@@ -1332,7 +1369,10 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
   return (
     <div
       ref={setContainerRef}
-      className="relative h-screen w-screen select-none overflow-hidden bg-black text-white"
+      className={cn(
+        'relative h-screen w-screen select-none overflow-hidden bg-black text-white',
+        hideCursor ? 'cursor-none' : 'cursor-default',
+      )}
       onMouseMove={wake}
       onContextMenu={openContextMenu}
     >
@@ -1354,12 +1394,31 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
       <button
         type="button"
         aria-label={player.isPlaying ? '暂停' : '播放'}
-        className="absolute inset-0 z-60 cursor-default"
+        className={cn('absolute inset-0 z-60', hideCursor ? 'cursor-none' : 'cursor-default')}
         onClick={() => {
           togglePlayback()
           wake()
         }}
       />
+
+      {/* 悬停状态图标层：播放中显示暂停图标，暂停时显示播放图标 */}
+      <div
+        aria-hidden="true"
+        className={cn(
+          'pointer-events-none absolute inset-0 z-70 flex items-center justify-center transition-opacity duration-200',
+          player.controlsVisible && !player.buffering && !player.ended && !adActive
+            ? 'opacity-100'
+            : 'opacity-0',
+        )}
+      >
+        <span className="flex size-16 items-center justify-center rounded-full bg-black/45 text-white backdrop-blur-sm md:size-20">
+          {player.isPlaying ? (
+            <Pause className="size-8 fill-current" />
+          ) : (
+            <Play className="size-8 fill-current" />
+          )}
+        </span>
+      </div>
 
       {/* 中插广告：素材常驻挂载以便绑定媒体事件，仅在广告时段显示 */}
       <video
@@ -1414,6 +1473,30 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
             aria-label="缓冲中"
             className="size-10 animate-spin rounded-full border-2 border-white/25 border-t-white"
           />
+        </div>
+      ) : null}
+
+      {/* 音量调整状态层：按上下键调整音量时短暂显示 */}
+      {volumeOsd !== null ? (
+        <div className="pointer-events-none absolute inset-x-0 top-16 z-90 flex justify-center md:top-20">
+          <div className="flex items-center gap-3 rounded-full bg-black/70 px-4 py-2 text-white backdrop-blur">
+            {volumeOsd === 0 ? (
+              <VolumeX className="size-5" />
+            ) : volumeOsd < 0.5 ? (
+              <Volume1 className="size-5" />
+            ) : (
+              <Volume2 className="size-5" />
+            )}
+            <div className="h-1 w-28 overflow-hidden rounded-full bg-white/25">
+              <div
+                className="h-full rounded-full bg-white"
+                style={{ width: `${Math.round(volumeOsd * 100)}%` }}
+              />
+            </div>
+            <span className="w-9 text-right text-xs tabular-nums text-white/80">
+              {Math.round(volumeOsd * 100)}%
+            </span>
+          </div>
         </div>
       ) : null}
 
@@ -1626,7 +1709,7 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
               step={1}
               aria-label="音量"
               onValueChange={(value) => dispatch(setVolume((value[0] ?? 0) / 100))}
-              className="w-0 overflow-hidden opacity-0 transition-all duration-200 group-hover/volume:w-24 group-hover/volume:opacity-100 [&_[data-slot=slider-range]]:bg-white [&_[data-slot=slider-thumb]]:size-3 [&_[data-slot=slider-thumb]]:border-0 [&_[data-slot=slider-thumb]]:bg-white [&_[data-slot=slider-track]]:h-1 [&_[data-slot=slider-track]]:bg-white/30"
+              className="pointer-events-none w-0 py-2 opacity-0 transition-all duration-200 group-hover/volume:pointer-events-auto group-hover/volume:w-24 group-hover/volume:opacity-100 [&_[data-slot=slider-range]]:bg-white [&_[data-slot=slider-thumb]]:size-3 [&_[data-slot=slider-thumb]]:border-0 [&_[data-slot=slider-thumb]]:bg-white [&_[data-slot=slider-track]]:h-1 [&_[data-slot=slider-track]]:bg-white/30"
             />
           </div>
 
@@ -1797,13 +1880,6 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
                 >
                   自动播放下一集
                 </DropdownMenuCheckboxItem>
-                <DropdownMenuSeparator className="bg-white/10" />
-                <DropdownMenuItem
-                  className="cursor-pointer gap-2"
-                  onClick={() => navigate(`/title/${title.id}`)}
-                >
-                  作品详情
-                </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
 
