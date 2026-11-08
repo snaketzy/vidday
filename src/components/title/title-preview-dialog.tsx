@@ -175,7 +175,7 @@ export function TitlePreviewDialog() {
                         src={titleBackdrop(item)}
                         alt={item.name}
                         paletteId={item.id}
-                        className="aspect-video w-full rounded-md transition group-hover:ring-2 group-hover:ring-white/25"
+                        className="aspect-video w-full rounded-md"
                       />
                       <span className="mt-2 block truncate text-xs text-white/80">{item.name}</span>
                       <span className="text-[11px] text-white/45">{item.match}% 匹配</span>

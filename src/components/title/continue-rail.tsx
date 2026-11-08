@@ -31,7 +31,7 @@ export function ContinueRail({ heading = '继续观看' }: { heading?: string })
           return (
             <article
               key={title.id}
-              className="group/continue relative aspect-video w-[224px] shrink-0 overflow-hidden rounded-md transition duration-300 hover:z-20 hover:ring-2 hover:ring-white/25 sm:w-[252px] lg:w-[286px]"
+              className="group/continue relative aspect-video w-[224px] shrink-0 overflow-hidden rounded-md transition duration-300 hover:z-20 sm:w-[252px] lg:w-[286px]"
             >
               <button
                 type="button"

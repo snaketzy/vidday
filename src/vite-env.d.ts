@@ -25,6 +25,8 @@ interface ViddaySubscriptionState {
 interface ViddayProxyStatus {
   /** 代理核心是否已就绪并接管了本应用流量 */
   enabled: boolean
+  /** 是否改用本机（系统）网络：true 时本应用不经内核转发，跟随系统代理设置 */
+  hostNetwork: boolean
   /** 人类可读的原因/说明，便于排查 */
   reason: string
   /** 本地混合端口（HTTP + SOCKS 同端口） */
@@ -71,6 +73,8 @@ interface ViddayBridge {
     /** 保存新的订阅地址并重启内核 */
     setSubscription: (url: string) => Promise<ViddayProxyStatus>
     groups: () => Promise<ViddayProxyGroup[]>
+    /** 切换网络出口：true 走本机（系统）网络，false 走应用内置内核代理 */
+    setHostNetwork: (enabled: boolean) => Promise<ViddayProxyStatus>
     select: (group: string, node: string, activateRoute?: string) => Promise<void>
     delay: (node: string, slot?: number) => Promise<ViddayNodeDelay>
   }

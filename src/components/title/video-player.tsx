@@ -1503,7 +1503,7 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
             step={1}
             aria-label="播放进度"
             onValueChange={(value) => seekTo(value[0] ?? 0)}
-            className="[&_[data-slot=slider-buffered]]:bg-[#640D14] [&_[data-slot=slider-range]]:bg-brand [&_[data-slot=slider-thumb]]:size-3 [&_[data-slot=slider-thumb]]:border-0 [&_[data-slot=slider-thumb]]:bg-brand [&_[data-slot=slider-track]]:h-1 [&_[data-slot=slider-track]]:bg-white/20"
+            className="[&_[data-slot=slider-buffered]]:bg-[#a31621] [&_[data-slot=slider-range]]:bg-brand [&_[data-slot=slider-thumb]]:size-3 [&_[data-slot=slider-thumb]]:border-0 [&_[data-slot=slider-thumb]]:bg-brand [&_[data-slot=slider-track]]:h-1 [&_[data-slot=slider-track]]:bg-white/20"
           />
           <span className="w-14 shrink-0 text-xs tabular-nums text-white/55">
             {formatTime(player.duration)}

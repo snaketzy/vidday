@@ -18,6 +18,7 @@ import {
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Switch } from '@/components/ui/switch'
 
 /** 代理核心（mihomo）的分组名，需与 `electron/proxy.ts` 的 PROXY_GROUP 保持一致。 */
 const PROXY_GROUP = 'PROXY'
@@ -102,12 +103,16 @@ export function NetworkPanel() {
   const [savingSub, setSavingSub] = useState(false)
   const [nodeQuery, setNodeQuery] = useState('')
   const [switching, setSwitching] = useState(false)
+  const [switchingNetwork, setSwitchingNetwork] = useState(false)
+  const [networkError, setNetworkError] = useState<string | null>(null)
   const [switchFeedback, setSwitchFeedback] = useState<{
     message: string
     error: boolean
   } | null>(null)
 
   const routeGroup = groups.find((item) => item.name === PROXY_GROUP) ?? null
+  /** 当前是否走本机（系统）网络；false 表示由应用内置内核转发 */
+  const hostNetwork = status?.hostNetwork ?? false
   const visibleGroups = groups.filter(
     (item) => item.name !== PROXY_GROUP && item.name !== 'GLOBAL' && item.nodes.length > 0,
   )
@@ -250,6 +255,21 @@ export function NetworkPanel() {
     }
   }
 
+  const handleToggleHostNetwork = async (next: boolean) => {
+    if (!proxy) return
+    setSwitchingNetwork(true)
+    setNetworkError(null)
+    try {
+      // 主进程会即时重设 session 出口并断开既有连接；内核保持运行
+      const updated = await proxy.setHostNetwork(next)
+      setStatus(updated)
+    } catch (error) {
+      setNetworkError(error instanceof Error ? error.message : '切换网络出口失败')
+    } finally {
+      setSwitchingNetwork(false)
+    }
+  }
+
   if (!proxy) {
     return (
       <section className="mt-6 rounded-md border border-white/10 bg-[#181818] p-6">
@@ -289,26 +309,71 @@ export function NetworkPanel() {
     { label: '线路数量', value: status ? String(status.lineCount) : '—' },
   ]
 
+  const badgeTone = !status?.enabled
+    ? 'bg-white/10 text-white/50'
+    : hostNetwork
+      ? 'bg-amber-500/15 text-amber-300'
+      : 'bg-emerald-500/15 text-emerald-300'
+  const badgeLabel = !status?.enabled ? '未启用' : hostNetwork ? '走本机网络' : '已接管'
+
   return (
     <section className="mt-6 rounded-md border border-white/10 bg-[#181818] p-6">
       <div className="flex items-start gap-3">
         <div className="min-w-0 flex-1">
           <h2 className="text-base font-semibold text-white/90">线路与网络</h2>
           <p className="mt-1 text-xs text-white/45">
-            应用内流量经本地内核（mihomo）转发，不修改系统代理，仅对本应用生效。
+            应用内流量默认经本地内核（mihomo）转发，不修改系统代理，仅对本应用生效；也可改用本机网络。
           </p>
         </div>
-        <Badge
+        <Badge className={cn('shrink-0 gap-1', badgeTone)}>
+          {status?.enabled ? <Wifi /> : <WifiOff />}
+          {badgeLabel}
+        </Badge>
+      </div>
+
+      {/* 网络出口切换：本机（系统）网络 <-> 应用内置内核代理 */}
+      <div className="mt-5 rounded-lg border border-white/10 bg-[#101010] p-4">
+        <div className="flex items-center justify-between gap-4">
+          <div className="min-w-0">
+            <label
+              htmlFor="vidday-host-network"
+              className="text-sm font-medium text-white/90"
+            >
+              使用本机网络
+            </label>
+            <p className="mt-1 text-xs text-white/45">
+              开启后停用内置内核代理，本应用流量改用本机网络（跟随系统代理设置）。
+            </p>
+          </div>
+          <Switch
+            id="vidday-host-network"
+            checked={hostNetwork}
+            onCheckedChange={(next) => void handleToggleHostNetwork(next)}
+            disabled={!status?.enabled || switchingNetwork}
+            aria-label="使用本机网络"
+          />
+        </div>
+        <p
           className={cn(
-            'shrink-0 gap-1',
-            status?.enabled
-              ? 'bg-emerald-500/15 text-emerald-300'
-              : 'bg-white/10 text-white/50',
+            'mt-3 text-xs',
+            switchingNetwork || !status?.enabled
+              ? 'text-white/45'
+              : hostNetwork
+                ? 'text-amber-300'
+                : 'text-emerald-300',
           )}
         >
-          {status?.enabled ? <Wifi /> : <WifiOff />}
-          {status?.enabled ? '已接管' : '未启用'}
-        </Badge>
+          {switchingNetwork
+            ? '正在切换网络出口…'
+            : !status?.enabled
+              ? '内核未启用，本应用当前走本机网络'
+              : hostNetwork
+                ? '已走本机网络（内核代理未接管本应用）'
+                : '已走应用内置网络'}
+        </p>
+        {networkError ? (
+          <p className="mt-1 text-xs text-rose-300">{networkError}</p>
+        ) : null}
       </div>
 
       <dl className="mt-4 grid gap-3 text-xs sm:grid-cols-2">
@@ -320,35 +385,37 @@ export function NetworkPanel() {
         ))}
       </dl>
 
-      {/* 订阅地址可配置：换线路来源无需改动仓库文件 */}
-      <div className="mt-4">
-        <label className="text-xs text-white/45" htmlFor="vidday-sub-url">
-          订阅地址
-        </label>
-        <div className="mt-2 flex gap-2">
-          <input
-            id="vidday-sub-url"
-            value={subUrl}
-            onChange={(event) => setSubUrl(event.target.value)}
-            spellCheck={false}
-            placeholder="https://example.com/api/v1/subscribe?token=..."
-            className="min-w-0 flex-1 rounded-md border border-white/15 bg-[#101010] px-3 py-2 text-xs text-white/85 outline-none placeholder:text-white/25 focus:border-white/40"
-          />
-          <Button
-            variant="outline"
-            size="sm"
-            className="shrink-0 gap-2 border-white/25 bg-transparent text-white/80 hover:border-white hover:bg-white/10 hover:text-white"
-            onClick={handleSaveSub}
-            disabled={busy !== null || savingSub}
-          >
-            {savingSub ? <Loader2 className="animate-spin" /> : <Save />}
-            保存并更新
-          </Button>
+      {/* 订阅地址可配置：仅开发版可见；正式版不暴露该入口，换线路来源无需改动仓库文件 */}
+      {import.meta.env.DEV ? (
+        <div className="mt-4">
+          <label className="text-xs text-white/45" htmlFor="vidday-sub-url">
+            订阅地址
+          </label>
+          <div className="mt-2 flex gap-2">
+            <input
+              id="vidday-sub-url"
+              value={subUrl}
+              onChange={(event) => setSubUrl(event.target.value)}
+              spellCheck={false}
+              placeholder="https://example.com/api/v1/subscribe?token=..."
+              className="min-w-0 flex-1 rounded-md border border-white/15 bg-[#101010] px-3 py-2 text-xs text-white/85 outline-none placeholder:text-white/25 focus:border-white/40"
+            />
+            <Button
+              variant="outline"
+              size="sm"
+              className="shrink-0 gap-2 border-white/25 bg-transparent text-white/80 hover:border-white hover:bg-white/10 hover:text-white"
+              onClick={handleSaveSub}
+              disabled={busy !== null || savingSub}
+            >
+              {savingSub ? <Loader2 className="animate-spin" /> : <Save />}
+              保存并更新
+            </Button>
+          </div>
+          <p className="mt-2 text-[11px] text-white/35">
+            保存后会重启内核并按新地址重新拉取；若地址不变、只想重试，点「刷新」即可。
+          </p>
         </div>
-        <p className="mt-2 text-[11px] text-white/35">
-          保存后会重启内核并按新地址重新拉取；若地址不变、只想重试，点「刷新」即可。
-        </p>
-      </div>
+      ) : null}
 
       <div className="mt-4 flex flex-wrap gap-3">
         <Button

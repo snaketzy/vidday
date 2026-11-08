@@ -21,6 +21,9 @@ const bridge = {
     setSubscription: (url: string): Promise<ProxyStatus> =>
       ipcRenderer.invoke('proxy:set-subscription', url),
     groups: (): Promise<ProxyGroupView[]> => ipcRenderer.invoke('proxy:groups'),
+    /** 切换网络出口：true 走本机（系统）网络，false 走应用内置内核代理 */
+    setHostNetwork: (enabled: boolean): Promise<ProxyStatus> =>
+      ipcRenderer.invoke('proxy:set-host-network', enabled),
     select: (group: string, node: string, activateRoute?: string): Promise<void> =>
       ipcRenderer.invoke('proxy:select', group, node, activateRoute),
     delay: (node: string, slot?: number): Promise<NodeDelay> =>

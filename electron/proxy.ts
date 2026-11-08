@@ -77,6 +77,8 @@ interface LinesConfig {
   subscriptionInterval?: number
   /** 静态节点列表（与订阅二选一，也可并存） */
   proxies?: ProxyLine[]
+  /** 是否改用本机（系统）网络：true 时本应用不经内核转发，恢复跟随系统代理 */
+  useHostNetwork?: boolean
   /** 覆盖默认端口 */
   mixedPort?: number
   controllerPort?: number
@@ -102,6 +104,7 @@ let subscription = EMPTY_SUBSCRIPTION
 
 let status: ProxyStatus = {
   enabled: false,
+  hostNetwork: false,
   reason: '尚未初始化',
   mixedPort,
   controllerPort,
@@ -402,6 +405,7 @@ export async function setupProxy(): Promise<ProxyStatus> {
   }
 
   const config = readConfig()
+  const hostNetwork = config.useHostNetwork ?? false
   mixedPort = config.mixedPort ?? DEFAULT_MIXED_PORT
   controllerPort = config.controllerPort ?? DEFAULT_CONTROLLER_PORT
   configDir = path.join(app.getPath('userData'), 'proxy')
@@ -437,14 +441,22 @@ export async function setupProxy(): Promise<ProxyStatus> {
   else if (hasNodes) reason = '已启用'
   else reason = '已启用（无线路，走 DIRECT）'
 
-  status = { enabled: ready, reason, mixedPort, controllerPort, lineCount, subscription }
+  status = { enabled: ready, hostNetwork, reason, mixedPort, controllerPort, lineCount, subscription }
   startRefreshTimer(config.subscriptionUrl ? (config.subscriptionInterval ?? DEFAULT_SUBSCRIPTION_INTERVAL) : 0)
   return status
 }
 
-/** 把本应用的 session 指向本地混合端口。仅影响该 session，不改系统代理。 */
+/**
+ * 把本应用的 session 指向内置代理，或恢复为系统网络。
+ * 仅影响该 session，不改系统代理。
+ * - 内核未就绪 / 选择「使用本机网络」时：恢复 Chromium 默认的 system 模式（跟随系统代理设置）；
+ * - 否则：指向本地混合端口。
+ */
 export async function applyProxyToSession(target: Session): Promise<void> {
-  if (!status.enabled) return
+  if (!status.enabled || status.hostNetwork) {
+    await target.setProxy({ mode: 'system' })
+    return
+  }
   await target.setProxy({
     proxyRules: `socks5://127.0.0.1:${mixedPort}`,
     // 回环与本机地址直连：dev server、本地后端、Clash API 都不进代理
@@ -585,6 +597,20 @@ export function registerProxyIpc(): void {
     if (!status.enabled) return []
     return listGroups()
   })
+
+  // 切换网络出口：本机（系统）网络 <-> 应用内置内核代理。内核保持运行，仅切换本应用的 session。
+  ipcMain.handle(
+    'proxy:set-host-network',
+    async (_event, enabled: boolean): Promise<ProxyStatus> => {
+      writeUserConfig({ useHostNetwork: enabled })
+      status = { ...status, hostNetwork: enabled }
+      // 立即生效：切到系统网络时恢复 system 模式，切回内置网络时重新指向本地端口
+      await applyProxyToSession(session.defaultSession)
+      // mihomo/系统代理只影响新建连接，断开既有连接使 App 流量立刻切换出口
+      await session.defaultSession.closeAllConnections()
+      return status
+    },
+  )
 
   ipcMain.handle(
     'proxy:select',

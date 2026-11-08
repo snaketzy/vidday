@@ -34,7 +34,7 @@ export function CollectionCard({ card, className, eager }: CollectionCardProps) 
       }}
       className={cn(
         'group/card relative aspect-video w-[224px] shrink-0 cursor-pointer overflow-hidden rounded-md bg-neutral-900 transition duration-300 sm:w-[252px] lg:w-[286px]',
-        'hover:z-20 hover:ring-2 hover:ring-white/25',
+        'hover:z-20',
         className,
       )}
     >

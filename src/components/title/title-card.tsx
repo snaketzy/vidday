@@ -52,7 +52,7 @@ export function TitleCard({
       className={cn(
         'group/card relative shrink-0 cursor-pointer overflow-hidden rounded-md transition duration-300',
         isPoster ? 'aspect-[9/16] w-[140px] sm:w-[158px] lg:w-[172px]' : 'aspect-video w-[224px] sm:w-[252px] lg:w-[286px]',
-        'hover:z-20 hover:ring-2 hover:ring-white/25',
+        'hover:z-20',
         className,
       )}
       onClick={() => navigate(`/title/${title.id}`)}

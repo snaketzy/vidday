@@ -30,6 +30,11 @@ export interface SubscriptionState {
 export interface ProxyStatus {
   /** 代理核心是否已就绪并接管了本应用流量 */
   enabled: boolean
+  /**
+   * 是否改用本机（系统）网络：true 时本应用不经内核转发，
+   * 恢复 Chromium 默认的 system 模式（跟随系统代理设置）；false 时走内置内核。
+   */
+  hostNetwork: boolean
   /** 人类可读的原因/说明，便于排查 */
   reason: string
   /** 本地混合端口（HTTP + SOCKS 同端口） */
