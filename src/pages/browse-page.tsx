@@ -11,7 +11,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { genreName, genres } from '@/data/genres'
+import { genreName } from '@/data/genres'
+import { useGenres } from '@/hooks/use-genres'
+import { useLatestTitles } from '@/hooks/use-latest-titles'
 import { filterTitles, isKidsTitle, type CatalogFilters, type SortBy } from '@/lib/catalog'
 import { useAppSelector } from '@/store/hooks'
 import { selectKidsMode } from '@/store/slices/auth-slice'
@@ -33,10 +35,18 @@ export function BrowsePage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const titles = useAppSelector(selectAllTitles)
   const kidsOnly = useAppSelector(selectKidsMode)
+  /** 题材筛选项与页头「浏览」菜单同源：后台影片库题材过滤器 */
+  const genres = useGenres()
 
   const typeParam = searchParams.get('type')
   const sortParam = searchParams.get('sort')
   const genreParam = searchParams.get('genre')
+  const addedWithinParam = searchParams.get('addedWithin')
+
+  /** `?addedWithin=N`：切到后端「最新上架」数据源（近 N 天已上架） */
+  const latestDays = Number(addedWithinParam)
+  const latestOnly = Number.isInteger(latestDays) && latestDays > 0
+  const { titles: latestTitles } = useLatestTitles(latestOnly ? latestDays : null)
 
   const filters: CatalogFilters = useMemo(
     () => ({
@@ -44,12 +54,25 @@ export function BrowsePage() {
       genreId: genreParam && genres.some((genre) => genre.id === genreParam) ? genreParam : null,
       sortBy: sortParam === 'newest' || sortParam === 'name' ? sortParam : 'match',
     }),
-    [typeParam, sortParam, genreParam],
+    [typeParam, sortParam, genreParam, genres],
   )
 
+  const activeGenreName = filters.genreId
+    ? (genres.find((genre) => genre.id === filters.genreId)?.name ?? genreName(filters.genreId))
+    : null
+
+  const pool = latestOnly ? latestTitles : titles
+
   const results = useMemo(
-    () => filterTitles(kidsOnly ? titles.filter(isKidsTitle) : titles, filters),
-    [titles, filters, kidsOnly],
+    () =>
+      filterTitles(
+        kidsOnly ? pool.filter(isKidsTitle) : pool,
+        filters,
+        '',
+        false,
+        latestOnly,
+      ),
+    [pool, filters, kidsOnly, latestOnly],
   )
 
   const update = (key: string, value: string | null) => {
@@ -59,17 +82,18 @@ export function BrowsePage() {
     setSearchParams(next, { replace: true })
   }
 
-  const hasFilters = Boolean(genreParam || typeParam || sortParam)
+  const hasFilters = Boolean(genreParam || typeParam || sortParam || addedWithinParam)
 
   return (
     <div className="min-h-[70vh] pb-12 pt-24 md:pt-28">
       <div className="px-4 md:px-12">
         <h1 className="text-2xl font-bold tracking-tight text-white md:text-3xl">
-          {filters.genreId ? genreName(filters.genreId) : '浏览全部作品'}
+          {activeGenreName ?? (latestOnly ? '最新上架' : '浏览全部作品')}
         </h1>
         <p className="mt-1 text-sm text-white/50">
           共 {results.length} 部作品
-          {filters.genreId ? ` · ${genreName(filters.genreId)}` : ''}
+          {latestOnly ? ` · 近 ${latestDays} 天内上架` : ''}
+          {activeGenreName ? ` · ${activeGenreName}` : ''}
         </p>
       </div>
 

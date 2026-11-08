@@ -85,6 +85,22 @@ export interface PublicCollectionDetail {
   items: PublicCarouselCard[]
 }
 
+/** 题材项：与后台影片库题材过滤器同源。 */
+export interface PublicGenre {
+  /** 英文 code，如 Action / Science Fiction */
+  code: string
+  /** 中文名，如 动作 */
+  name: string
+}
+
+/** 近 N 天上架内容：仅后台「已上架」状态，按入库时间倒序。 */
+export interface PublicLatest {
+  days: number
+  /** 窗口内总数（不受 limit 影响） */
+  total: number
+  items: PublicCarouselCard[]
+}
+
 export type PublicApiErrorKind = 'network' | 'http' | 'contract'
 
 export class PublicApiError extends Error {
@@ -304,5 +320,39 @@ export async function fetchCollectionDetail(
     coverUrl: text(raw.coverUrl),
     covers: textList(raw.covers),
     items: normalizeCards(raw.items),
+  }
+}
+
+/**
+ * 影片库题材清单：与后台「电影库 → 题材过滤器」同源，
+ * 供前台「浏览」菜单构建筛选项；后端新增题材会自动出现。
+ */
+export async function fetchGenres(signal?: AbortSignal): Promise<PublicGenre[]> {
+  const body = unwrap(await getJson('/public/genres', signal))
+  if (!Array.isArray(body.genres)) return []
+
+  return body.genres.filter(isRecord).flatMap((raw) => {
+    const code = text(raw.code)
+    const name = text(raw.name)
+    return code && name ? [{ code, name }] : []
+  })
+}
+
+/**
+ * 近 N 天上架内容（影片 + 剧集，仅后台「已上架」状态），按入库时间倒序。
+ * 首页「最新上架」轨取前 10；`limit` 缺省返回窗口内全部，供 `/browse?addedWithin=N`。
+ */
+export async function fetchLatest(
+  params: { days: number; limit?: number },
+  signal?: AbortSignal,
+): Promise<PublicLatest> {
+  const search = new URLSearchParams({ days: String(params.days) })
+  if (params.limit !== undefined) search.set('limit', String(params.limit))
+
+  const body = unwrap(await getJson(`/public/latest?${search.toString()}`, signal))
+  return {
+    days: num(body.days) ?? params.days,
+    total: num(body.total) ?? 0,
+    items: normalizeCards(body.items),
   }
 }

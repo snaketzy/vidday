@@ -54,6 +54,11 @@ export function filterTitles(
   filters: CatalogFilters,
   keyword = '',
   kidsOnly = false,
+  /**
+   * true 时保持入参顺序：用于「最新上架」这类已按入库时间排好的列表，
+   * 此时默认的「按推荐度」等价于「按上架时间」。
+   */
+  preserveOrder = false,
 ) {
   const result = list.filter((title) => {
     if (kidsOnly && !isKidsTitle(title)) return false
@@ -61,6 +66,7 @@ export function filterTitles(
     if (filters.genreId && !title.genres.includes(filters.genreId)) return false
     return matchesKeyword(title, keyword)
   })
+  if (preserveOrder && filters.sortBy === 'match') return result
   return sortTitles(result, filters.sortBy)
 }
 

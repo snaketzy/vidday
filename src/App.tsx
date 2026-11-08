@@ -1,5 +1,6 @@
 import { Navigate, Outlet, Route, Routes } from 'react-router'
 
+import { ErrorBoundary } from '@/components/error-boundary'
 import { AppLayout } from '@/components/layout/app-layout'
 import { AccountPage } from '@/pages/account-page'
 import { BrowsePage } from '@/pages/browse-page'
@@ -32,30 +33,32 @@ function RequireProfile() {
 
 export function App() {
   return (
-    <Routes>
-      <Route path="/login" element={<LoginPage />} />
+    <ErrorBoundary>
+      <Routes>
+        <Route path="/login" element={<LoginPage />} />
 
-      <Route element={<RequireAuth />}>
-        <Route path="/profiles" element={<ProfilesPage />} />
-        <Route path="/account" element={<AccountPage />} />
+        <Route element={<RequireAuth />}>
+          <Route path="/profiles" element={<ProfilesPage />} />
+          <Route path="/account" element={<AccountPage />} />
 
-        <Route element={<RequireProfile />}>
-          {/* 播放页独占全屏，不带站点顶栏与页脚 */}
-          <Route path="/watch/:id" element={<WatchPage />} />
-          <Route path="/watch/:id/:episodeId" element={<WatchPage />} />
+          <Route element={<RequireProfile />}>
+            {/* 播放页独占全屏，不带站点顶栏与页脚 */}
+            <Route path="/watch/:id" element={<WatchPage />} />
+            <Route path="/watch/:id/:episodeId" element={<WatchPage />} />
 
-          <Route element={<AppLayout />}>
-            <Route path="/" element={<HomePage />} />
-            <Route path="/browse" element={<BrowsePage />} />
-            <Route path="/title/:id" element={<TitleDetailPage />} />
-            <Route path="/collection/:id" element={<CollectionPage />} />
-            <Route path="/search" element={<SearchPage />} />
-            <Route path="/my-list" element={<MyListPage />} />
-            <Route path="/playback-lines" element={<PlaybackLinesPage />} />
-            <Route path="*" element={<NotFoundPage />} />
+            <Route element={<AppLayout />}>
+              <Route path="/" element={<HomePage />} />
+              <Route path="/browse" element={<BrowsePage />} />
+              <Route path="/title/:id" element={<TitleDetailPage />} />
+              <Route path="/collection/:id" element={<CollectionPage />} />
+              <Route path="/search" element={<SearchPage />} />
+              <Route path="/my-list" element={<MyListPage />} />
+              <Route path="/playback-lines" element={<PlaybackLinesPage />} />
+              <Route path="*" element={<NotFoundPage />} />
+            </Route>
           </Route>
         </Route>
-      </Route>
-    </Routes>
+      </Routes>
+    </ErrorBoundary>
   )
 }

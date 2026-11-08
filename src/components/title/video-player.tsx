@@ -1,4 +1,4 @@
-import Hls, { ErrorDetails } from 'hls.js'
+import Hls from 'hls.js'
 import { PgsRenderer } from 'libpgs'
 // worker 必须交给打包器产出真实地址：照 README 写 './node_modules/...' 在 Vite 下会 404
 import pgsWorkerUrl from 'libpgs/dist/libpgs.worker.js?url'
@@ -89,10 +89,13 @@ const PGS_INDEX_PATH = 'pgs-subs/index.json'
 const PGS_KEY_PREFIX = 'pgs:'
 
 /**
- * manifest 拉取失败后的重试上限。
- * hls.js 只在内部重试到耗尽，之后必须由调用方重新 loadSource 才会再拉一次。
+ * 断流退避重试参数。
+ * hls.js 只在内部重试到耗尽，之后必须由调用方重新 loadSource / startLoad 才会再拉一次；
+ * manifest 阶段（levels 为空）调用 startLoad() 是空操作，只能重新 loadSource。
+ * 这里按退避一直重试，网络（或所选播放线路）恢复后即可自动续播，避免永久黑屏。
  */
-const MANIFEST_RETRY_LIMIT = 3
+const RETRY_BASE_DELAY_MS = 800
+const RETRY_MAX_DELAY_MS = 12000
 
 /** Stats for nerds 是调试能力，仅在开发环境提供，生产构建下彻底不出现 */
 const STATS_FOR_NERDS_ENABLED = import.meta.env.DEV
@@ -106,30 +109,6 @@ const AD_SOURCE = '/ads/ad-sample.mp4'
 const AD_INTERVAL = 60
 /** 广告可跳过前的强制观看时长（秒） */
 const AD_SKIP_AFTER = 5
-
-// #region debug-point:report-helper
-/* 临时埋点上报：指向本地 Debug Server（session=hls-stutter-latency），验证完即删 */
-const DEBUG_ENDPOINT = 'http://127.0.0.1:7779/event'
-const DEBUG_SESSION_ID = 'hls-stutter-latency'
-const dbgReport = (hypothesisId: string, location: string, msg: string, data?: Record<string, unknown>) => {
-  try {
-    fetch(DEBUG_ENDPOINT, {
-      method: 'POST',
-      body: JSON.stringify({
-        sessionId: DEBUG_SESSION_ID,
-        runId: 'pre',
-        hypothesisId,
-        location,
-        msg,
-        data: data ?? {},
-        ts: Date.now(),
-      }),
-    }).catch(() => {})
-  } catch {
-    /* 网络失败不干扰播放 */
-  }
-}
-// #endregion
 
 const controlClass = 'text-white hover:bg-white/15 focus-visible:ring-white/40'
 const menuClass = 'z-100 border-white/10 bg-[#181818] text-white'
@@ -502,8 +481,8 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
   const [menuPortalContainer, setMenuPortalContainer] = useState<HTMLElement | null>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
   const adVideoRef = useRef<HTMLVideoElement>(null)
-  /** 外挂 PGS 字幕的绘制层，交由 libpgs 写入 */
-  const pgsCanvasRef = useRef<HTMLCanvasElement>(null)
+  /** 外挂 PGS 字幕层容器：canvas 由 effect 动态创建，保证每次 setup 都是全新节点 */
+  const pgsLayerRef = useRef<HTMLDivElement>(null)
   const hlsRef = useRef<Hls | null>(null)
   /** 最近一次分片请求命中的 Cloudflare 接入机房三字码 */
   const edgeColoRef = useRef<string | null>(null)
@@ -629,7 +608,29 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
     hlsRef.current = hls
     hls.loadSource(sourceUrl)
     hls.attachMedia(video)
-    let manifestRetries = 0
+
+    /* 断流恢复：网络失败后按退避重试；manifest 阶段只能重拉 loadSource，
+       已解析出 levels 后则 startLoad 续拉分片。线路恢复即自动续播。 */
+    let retryTimer: number | undefined
+    let retryAttempt = 0
+    const clearRetry = () => {
+      if (retryTimer !== undefined) {
+        window.clearTimeout(retryTimer)
+        retryTimer = undefined
+      }
+    }
+    const scheduleRetry = () => {
+      clearRetry()
+      retryAttempt += 1
+      const delay = Math.min(RETRY_BASE_DELAY_MS * 2 ** (retryAttempt - 1), RETRY_MAX_DELAY_MS)
+      // 重试期间保持「加载中」，避免用户看到无从判断的纯黑画面
+      dispatch(setBuffering(true))
+      retryTimer = window.setTimeout(() => {
+        retryTimer = undefined
+        if (hls.levels.length === 0) hls.loadSource(sourceUrl)
+        else hls.startLoad()
+      }, delay)
+    }
 
     /* 从播放内核读取当前视频源的真实轨道，回写到状态供下拉渲染 */
     const publishTracks = () => {
@@ -642,7 +643,8 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
     }
 
     hls.on(Hls.Events.MANIFEST_PARSED, () => {
-      manifestRetries = 0
+      clearRetry()
+      retryAttempt = 0
       const list = toQualityLevels(hls.levels)
       setLevels(list)
       dispatch(setQuality(pickQuality(list, qualityRef.current)))
@@ -683,70 +685,7 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
     }
     hls.on(Hls.Events.FRAG_LOADED, recordFragLoad)
 
-    // #region debug-point A:frag-timing
-    /* 每个分片的 TTFB / 下载耗时 / 实际吞吐，用于验证「国际链路慢」假设 */
-    const dbgFragTiming = (_event: unknown, data: { frag?: { url?: string; level?: number; stats?: { loading?: { start?: number; first?: number; end?: number }; loaded?: number; total?: number } }; networkDetails?: NetworkDetailsLike }) => {
-      const load = data?.frag?.stats?.loading
-      if (!load) return
-      const bytes = data?.frag?.stats?.loaded || data?.frag?.stats?.total || 0
-      const start = load.start ?? 0
-      const first = load.first ?? 0
-      const end = load.end ?? 0
-      const ttfbMs = first && start ? Math.round(first - start) : null
-      const downloadMs = end && start ? Math.round(end - start) : null
-      const throughputBps = downloadMs && bytes ? Math.round((bytes * 8) / (downloadMs / 1000)) : null
-      const video = videoRef.current
-      const level = data?.frag?.level ?? -1
-      const levelInfo = level >= 0 ? hls.levels[level] : undefined
-      dbgReport('A', 'video-player.tsx:FRAG_LOADED', '[DEBUG] frag network timing', {
-        frag: data?.frag?.url?.split('/').slice(-2).join('/') ?? null,
-        fragLevel: level,
-        bytes,
-        ttfbMs,
-        downloadMs,
-        throughputBps,
-        levelBitrateBps: levelInfo?.bitrate ?? null,
-        bandwidthEstimateBps: hls.bandwidthEstimate,
-        bufferHealthS: video ? Number(bufferedWindow(video).health.toFixed(2)) : null,
-        currentTime: video ? Number(video.currentTime.toFixed(2)) : null,
-        colo: edgeColoFromResponse(data?.networkDetails ?? null),
-      })
-    }
-    hls.on(Hls.Events.FRAG_LOADED, dbgFragTiming)
-    // #endregion
-
-    // #region debug-point C:stall-events
-    /* 真实卡顿事件：waiting/stalled 与当时缓冲水位、网络状态 */
-    const dbgStall = (kind: string) => () => {
-      const v = videoRef.current
-      dbgReport('C', `video-player.tsx:video:${kind}`, `[DEBUG] video ${kind}`, {
-        currentTime: v ? Number(v.currentTime.toFixed(2)) : null,
-        bufferHealthS: v ? Number(bufferedWindow(v).health.toFixed(2)) : null,
-        readyState: v?.readyState ?? null,
-        networkState: v?.networkState ?? null,
-        buffering: playerRef.current.buffering,
-        currentLevel: hls.currentLevel,
-        bandwidthEstimateBps: hls.bandwidthEstimate,
-      })
-    }
-    const onWaiting = dbgStall('waiting')
-    const onStalled = dbgStall('stalled')
-    const onPlaying = dbgStall('playing')
-    video.addEventListener('waiting', onWaiting)
-    video.addEventListener('stalled', onStalled)
-    video.addEventListener('playing', onPlaying)
-    // #endregion
     hls.on(Hls.Events.ERROR, (_event, data) => {
-      // #region debug-point A:error
-      dbgReport('A', 'video-player.tsx:ERROR', `[DEBUG] hls ${data.fatal ? 'fatal' : 'non-fatal'} ${data.type}/${data.details}`, {
-        type: data.type,
-        details: data.details,
-        fatal: data.fatal,
-        reason: typeof data.reason === 'string' ? data.reason : null,
-        url: (data as { url?: string }).url ?? null,
-        currentTime: videoRef.current ? Number(videoRef.current.currentTime.toFixed(2)) : null,
-      })
-      // #endregion
       // 原本这里把 hls.js 的死因全吞了，出问题只能看到「黑屏」看不出为什么，开发期留痕
       if (import.meta.env.DEV) {
         console.error(
@@ -757,17 +696,10 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
       if (!data.fatal) return
 
       if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-        // manifest 阶段失败时 levels 仍是空的，而 playListLoader.startLoad() 在 hls.js 里是空函数，
-        // 调 startLoad() 等于什么都不做，一次瞬时失败就会永久黑屏；只能重新 loadSource 再拉一次
-        const manifestFailed =
-          data.details === ErrorDetails.MANIFEST_LOAD_ERROR ||
-          data.details === ErrorDetails.MANIFEST_LOAD_TIMEOUT
-        if (manifestFailed && manifestRetries < MANIFEST_RETRY_LIMIT) {
-          manifestRetries += 1
-          hls.loadSource(sourceUrl)
-        } else {
-          hls.startLoad()
-        }
+        // manifest 阶段失败（含超时 / 解析失败）时 levels 仍为空，而 playListLoader.startLoad()
+        // 在 hls.js 里是空函数，调它等于什么都不做，一次瞬时失败就会永久黑屏。
+        // 交给 scheduleRetry 按退避重试：levels 为空则重拉 manifest，否则续拉分片。
+        scheduleRetry()
         return
       }
 
@@ -780,11 +712,7 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
     })
 
     return () => {
-      // #region debug-point C:stall-events
-      video.removeEventListener('waiting', onWaiting)
-      video.removeEventListener('stalled', onStalled)
-      video.removeEventListener('playing', onPlaying)
-      // #endregion
+      clearRetry()
       hls.destroy()
       hlsRef.current = null
     }
@@ -849,7 +777,9 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
       .then((data) => dispatch(setPgsTracks(toPgsTrackOptions(data, indexUrl))))
       .catch(() => undefined)
     return () => controller.abort()
-  }, [dispatch])
+    // 依赖 sourceUrl：换片时组件同实例复用，必须按新片源重新拉取清单，
+    // 否则会残留上一部的 PGS 轨并误渲染到新片画面上。
+  }, [dispatch, sourceUrl])
 
   /* 音轨 / 字幕选择下发到播放内核 */
   useEffect(() => {
@@ -891,25 +821,46 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
     }
   }, [player.subtitle, player.audio, player.subtitleTracks, player.audioTracks, player.pgsTracks])
 
-  /* 外挂 PGS 字幕：选中清单中的轨道后，交给 libpgs 渲染到独立的 canvas 层 */
+  /*
+   * 外挂 PGS 字幕：选中清单中的轨道后，交给 libpgs 渲染到独立的 canvas 层。
+   * libpgs 会调用 canvas.transferControlToOffscreen()，而同一 canvas 只能转移一次控制权，
+   * 二次调用会抛 InvalidStateError；该异常发生在构造阶段，且无 Error Boundary 兜底，
+   * 会直接卸载 <VideoPlayer> 导致整页死屏。
+   * 换片时本组件同实例复用、旧 canvas 节点被沿用，正是二次转移的触发点；
+   * 因此这里由 effect 自建 canvas，每次 setup 都是全新节点，不依赖 React 复用旧节点。
+   */
   useEffect(() => {
     const video = videoRef.current
-    const canvas = pgsCanvasRef.current
-    if (!video || !canvas || !activePgsTrack?.url) return
+    const layer = pgsLayerRef.current
+    if (!video || !layer || !activePgsTrack?.url) return
 
-    const renderer = new PgsRenderer({
-      workerUrl: pgsWorkerUrl,
-      video,
-      canvas,
-      // 与 video 的 object-contain 保持一致，否则字幕会相对黑边错位
-      aspectRatio: 'contain',
-      subUrl: activePgsTrack.url,
-    })
-    void renderer.ready.catch((error) => {
-      console.error('[pgs] 字幕加载失败', activePgsTrack.url, error)
-    })
-    return () => renderer.dispose()
-  }, [activePgsTrack])
+    const canvas = document.createElement('canvas')
+    canvas.className = 'absolute inset-0 h-full w-full object-contain'
+    layer.replaceChildren(canvas)
+
+    let renderer: PgsRenderer | null = null
+    try {
+      renderer = new PgsRenderer({
+        workerUrl: pgsWorkerUrl,
+        video,
+        canvas,
+        // 与 video 的 object-contain 保持一致，否则字幕会相对黑边错位
+        aspectRatio: 'contain',
+        subUrl: activePgsTrack.url,
+      })
+      void renderer.ready.catch((error) => {
+        console.error('[pgs] 字幕加载失败', activePgsTrack.url, error)
+      })
+    } catch (error) {
+      // 兜底：即便 canvas 状态异常，也只降级为不显示字幕，不能连累整棵组件树
+      console.error('[pgs] 渲染器初始化失败', activePgsTrack.url, error)
+    }
+
+    return () => {
+      renderer?.dispose()
+      layer.replaceChildren()
+    }
+  }, [activePgsTrack?.url])
 
   /* 轨道列表变化后校正选择：字幕失效则关闭，音轨失效则回退到源默认轨 */
   useEffect(() => {
@@ -1271,42 +1222,6 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
     return () => window.clearInterval(timer)
   }, [refreshNerdStats, statsVisible])
 
-  // #region debug-point B:buffer-sampler
-  /* 1s 采样：缓冲水位(B) / 掉帧增量(D) / 估计带宽 vs 实际 5s 吞吐(E) */
-  useEffect(() => {
-    let prevDropped = 0
-    const timer = window.setInterval(() => {
-      const video = videoRef.current
-      const hls = hlsRef.current
-      if (!video || !hls || video.paused || video.ended) return
-      const samples = fragSamplesRef.current
-      const cutoff = performance.now() - NETWORK_WINDOW_MS
-      const bytes5s = samples.filter((s) => s.at >= cutoff).reduce((sum, s) => sum + s.bytes, 0)
-      const level = hls.currentLevel >= 0 ? hls.levels[hls.currentLevel] : undefined
-      const levelBitrate = level?.averageBitrate ?? level?.bitrate ?? 0
-      const frames = readPlaybackFrames(video)
-      const droppedDelta = frames.dropped - prevDropped
-      prevDropped = frames.dropped
-      dbgReport('B', 'video-player.tsx:sampler', '[DEBUG] 1s sample', {
-        currentTime: Number(video.currentTime.toFixed(2)),
-        bufferHealthS: Number(bufferedWindow(video).health.toFixed(2)),
-        bandwidthEstimateBps: hls.bandwidthEstimate,
-        actualBytes5s: bytes5s,
-        actualBps5s: bytes5s ? Math.round((bytes5s * 8) / (NETWORK_WINDOW_MS / 1000)) : 0,
-        levelBitrateBps: levelBitrate,
-        levelIndex: hls.currentLevel,
-        droppedFramesDelta: droppedDelta,
-        droppedFramesTotal: frames.dropped,
-        readyState: video.readyState,
-        networkState: video.networkState,
-        buffering: playerRef.current.buffering,
-        playbackRate: video.playbackRate,
-      })
-    }, 1000)
-    return () => window.clearInterval(timer)
-  }, [])
-  // #endregion
-
   /* 快捷键 */
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -1390,16 +1305,9 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
       {/*
         外挂 PGS 字幕层：严格与 video 同框，并由 libpgs 按 contain 计算黑边偏移。
         必须 pointer-events-none，否则会挡住下方 z-60 的点击切换播放热区。
-        key 绑定轨道：libpgs 在自定义 canvas 上只卸载监听、不清理画面，
-        换轨或关闭时靠重建节点丢弃上一帧，避免残留字幕。
+        canvas 由 effect 动态创建并挂载到此容器，换轨/换片时整体重建，避免复用旧节点。
       */}
-      {activePgsTrack ? (
-        <canvas
-          key={activePgsTrack.key}
-          ref={pgsCanvasRef}
-          className="pointer-events-none absolute inset-0 z-10 h-full w-full object-contain"
-        />
-      ) : null}
+      <div ref={pgsLayerRef} className="pointer-events-none absolute inset-0 z-10 h-full w-full" />
 
       {/* 点击画面切换播放状态 */}
       <button

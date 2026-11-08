@@ -1,28 +1,11 @@
+import { GENRE_LABEL_TO_ID } from '@/data/genres'
 import type { PublicCarouselCard, PublicTitleDetail } from '@/lib/public-api'
 import type { Title } from '@/types'
 
 /**
- * 后端题材为 TMDB 中文标签，前台题材体系用英文 slug。
+ * 后端题材为 TMDB 中文标签，前台题材体系用英文 slug（映射表与内置题材清单同源）。
  * 能对上的落进 `genres`（筛选 / 相似推荐可用），对不上的落进 `tags`（仍然展示）。
  */
-const GENRE_LABEL_TO_ID: Record<string, string> = {
-  动作: 'action',
-  动画: 'animation',
-  喜剧: 'comedy',
-  犯罪: 'crime',
-  纪录: 'doc',
-  纪录片: 'doc',
-  剧情: 'drama',
-  家庭: 'family',
-  奇幻: 'fantasy',
-  历史: 'history',
-  恐怖: 'horror',
-  悬疑: 'suspense',
-  爱情: 'romance',
-  科幻: 'scifi',
-  惊悚: 'thriller',
-}
-
 function splitGenres(labels: string[]) {
   const genres: string[] = []
   const tags: string[] = []

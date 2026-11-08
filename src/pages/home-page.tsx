@@ -3,6 +3,7 @@ import { Fragment, useMemo } from 'react'
 import { CarouselBlock } from '@/components/carousel/carousel-block'
 import { ContinueRail } from '@/components/title/continue-rail'
 import { HeroBanner } from '@/components/title/hero-banner'
+import { LatestRail } from '@/components/title/latest-rail'
 import { TitleRail } from '@/components/title/title-rail'
 import { HOME_RAILS, KIDS_RAILS } from '@/data/rails'
 import { FEATURED_IDS } from '@/data/titles'
@@ -27,16 +28,26 @@ export function HomePage() {
     return { featured: picks.length ? picks : fallback, rails: railList }
   }, [titles, kidsOnly])
 
-  // 后台配置了轮播：完全以配置驱动（首屏 + 各轨）；「继续观看」保留为首屏之后/之前的一轨
+  // 后台配置了轮播：完全以配置驱动（首屏 + 各轨）；「最新上架」紧跟首屏，其后是「继续观看」
   if (status === 'ready' && carousels.length) {
     const heroFirst = carousels[0]?.variant === 'hero'
     return (
       <div className="pb-6">
-        {heroFirst ? null : <ContinueRail />}
+        {heroFirst ? null : (
+          <>
+            <LatestRail />
+            <ContinueRail />
+          </>
+        )}
         {carousels.map((carousel, index) => (
           <Fragment key={carousel.id}>
             <CarouselBlock carousel={carousel} eager={index === 0} />
-            {heroFirst && index === 0 ? <ContinueRail /> : null}
+            {heroFirst && index === 0 ? (
+              <>
+                <LatestRail />
+                <ContinueRail />
+              </>
+            ) : null}
           </Fragment>
         ))}
       </div>
@@ -47,6 +58,7 @@ export function HomePage() {
   return (
     <div className="pb-6">
       <HeroBanner titles={featured} />
+      <LatestRail />
 
       <div className="relative z-10 -mt-2 md:-mt-4">
         {rails.map(({ rail, list }, index) =>

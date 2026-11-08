@@ -16,8 +16,8 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from '@/components/ui/sheet'
-import { genres } from '@/data/genres'
 import { notifications } from '@/data/notifications'
+import { useGenres } from '@/hooks/use-genres'
 import { matchesKeyword } from '@/lib/catalog'
 import { avatarArt } from '@/lib/art'
 import { useAppDispatch, useAppSelector } from '@/store/hooks'
@@ -42,6 +42,8 @@ export function SiteHeader() {
   const searchOpen = useAppSelector(selectSearchOpen)
   const profile = useAppSelector(selectActiveProfile)
   const titles = useAppSelector(selectAllTitles)
+  /** 「浏览」菜单的题材项来自后台影片库题材过滤器 */
+  const genres = useGenres()
   const [keyword, setKeyword] = useState('')
   const [mobileOpen, setMobileOpen] = useState(false)
 

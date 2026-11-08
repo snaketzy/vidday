@@ -13,3 +13,11 @@ export function toWatchHref(id: string | number) {
 export function toCollectionHref(id: string | number) {
   return `/collection/${id}`
 }
+
+/**
+ * 近 N 天上架的全部作品：复用 `/browse` 网格，
+ * `addedWithin` 触发该页切换到后端「最新上架」数据源。
+ */
+export function toLatestHref(days: number) {
+  return `/browse?addedWithin=${days}`
+}
