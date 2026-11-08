@@ -13,6 +13,7 @@ import { timingSafeEqual } from 'node:crypto'
 import Fastify, { type FastifyInstance } from 'fastify'
 
 import { closePool, pingMysql } from './db/pool.ts'
+import { warmContentCache } from './db/queries.ts'
 import { env } from './env.ts'
 import { HttpError, unauthorized } from './http.ts'
 import { peopleRoutes } from './routes/people.ts'
@@ -97,6 +98,11 @@ async function main(): Promise<void> {
 
   await app.listen({ host: '0.0.0.0', port: env.port })
   app.log.info(`Vidday 后台服务已就绪：http://127.0.0.1:${env.port}`)
+
+  // 后台预热热点缓存：不阻塞启动，失败仅告警（下次请求回源即可）
+  void warmContentCache().catch((error: unknown) => {
+    app.log.warn({ err: error }, '内容缓存预热失败')
+  })
 
   let closing = false
   const shutdown = async (signal: string): Promise<void> => {

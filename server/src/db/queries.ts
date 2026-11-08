@@ -21,6 +21,7 @@ import type {
   PublicTitleCredits,
   PublicTitleDetail,
 } from '../contract.ts'
+import { cached } from '../cache.ts'
 import { movieBackdrop, moviePoster, personAvatar, seriesBackdrop, seriesPoster } from './assets.ts'
 import { getPool } from './pool.ts'
 
@@ -35,6 +36,15 @@ const COVER_STRIP_LIMIT = 4
 
 /** 「最新上架」默认统计窗口（天）与上限。 */
 export const DEFAULT_LATEST_DAYS = 7
+
+/**
+ * 缓存 TTL。只决定「回源频率」，不代表读取延迟：过期后仍先返回旧值、
+ * 刷新在后台进行，故这些只读内容可以设得偏长。
+ */
+const DICT_TTL_MS = 30 * 60_000
+const CAROUSEL_TTL_MS = 5 * 60_000
+const LATEST_TTL_MS = 2 * 60_000
+const DETAIL_TTL_MS = 5 * 60_000
 
 /* ------------------------------------------------------------------ *
  * 基础取值 / 时间转换（与内容管理端同口径）
@@ -183,13 +193,15 @@ interface Need {
   collectionIds?: number[]
 }
 
-/** 题材字典：id → 中文名。 */
+/** 题材字典：id → 中文名。变更频率极低，做进程内缓存。 */
 async function loadGenreLabelMap(): Promise<Map<number, string>> {
-  const [rows] = await getPool().query<RowDataPacket[]>(
-    `SELECT id, label_zh FROM \`dict\` WHERE group_code = ? ORDER BY sort_order, id`,
-    [GENRE_GROUP]
-  )
-  return new Map(rows.map((row) => [intOr(row.id), str(row.label_zh) ?? '']))
+  return cached('dict:genre-labels', DICT_TTL_MS, async () => {
+    const [rows] = await getPool().query<RowDataPacket[]>(
+      `SELECT id, label_zh FROM \`dict\` WHERE group_code = ? ORDER BY sort_order, id`,
+      [GENRE_GROUP]
+    )
+    return new Map(rows.map((row) => [intOr(row.id), str(row.label_zh) ?? '']))
+  })
 }
 
 /** 实体属性表中的题材 ID → 中文标签（按 sort_order 保序、去重）。 */
@@ -492,6 +504,18 @@ export async function listPublicCarousels(params: {
   placement: 'home' | 'collection'
   pageId: number | null
 }): Promise<PublicCarousel[]> {
+  return cached(
+    `carousels:${params.placement}:${params.pageId ?? 0}`,
+    CAROUSEL_TTL_MS,
+    () => loadPublicCarouselsUncached(params)
+  )
+}
+
+/** 轮播直查实现（不缓存）；缓存与缓存键由 listPublicCarousels 负责。 */
+async function loadPublicCarouselsUncached(params: {
+  placement: 'home' | 'collection'
+  pageId: number | null
+}): Promise<PublicCarousel[]> {
   const [carouselRows] = await getPool().query<RowDataPacket[]>(
     `SELECT id, title, variant, autoplay, interval_ms FROM \`carousel\`
      WHERE placement = ? AND is_active = 1 AND page_id <=> ?
@@ -549,6 +573,11 @@ export async function listPublicCarousels(params: {
 
 /** 影片 / 剧集详情（影片优先）。目标不存在返回 null。 */
 export async function getTitleDetail(id: number): Promise<PublicTitleDetail | null> {
+  return cached(`title:${id}`, DETAIL_TTL_MS, () => loadTitleDetailUncached(id))
+}
+
+/** 详情直查实现（不缓存）；缓存与缓存键由 getTitleDetail 负责。 */
+async function loadTitleDetailUncached(id: number): Promise<PublicTitleDetail | null> {
   const movie = (await loadMovieRows([id])).get(id)
   if (movie) return movieDetail(movie)
   const series = (await loadSeriesRows([id])).get(id)
@@ -681,6 +710,11 @@ async function genresFor(
 
 /** 完整演职员表：演员与职员分开，便于前台分组展示。 */
 export async function getTitleCredits(id: number): Promise<PublicTitleCredits | null> {
+  return cached(`title-credits:${id}`, DETAIL_TTL_MS, () => loadTitleCreditsUncached(id))
+}
+
+/** 演职员表直查实现（不缓存）；缓存与缓存键由 getTitleCredits 负责。 */
+async function loadTitleCreditsUncached(id: number): Promise<PublicTitleCredits | null> {
   let contentType: ContentType
   let rows: CreditRow[]
   if ((await loadMovieRows([id])).has(id)) {
@@ -728,6 +762,11 @@ function creditAvatar(row: CreditRow): string | null {
 
 /** 专题详情：名称 / 简介 / 封面包 + 按序影片卡片。目标不存在返回 null。 */
 export async function getCollectionDetail(id: number): Promise<PublicCollectionDetail | null> {
+  return cached(`collection:${id}`, DETAIL_TTL_MS, () => loadCollectionDetailUncached(id))
+}
+
+/** 专题详情直查实现（不缓存）；缓存与缓存键由 getCollectionDetail 负责。 */
+async function loadCollectionDetailUncached(id: number): Promise<PublicCollectionDetail | null> {
   const collection = (await loadCollectionRows([id])).get(id)
   if (!collection) return null
 
@@ -756,17 +795,29 @@ export async function getCollectionDetail(id: number): Promise<PublicCollectionD
 
 /** 题材清单：仅返回实际被影片使用的题材，与后台过滤器同源。 */
 export async function listGenres(): Promise<PublicGenre[]> {
-  const [rows] = await getPool().query<RowDataPacket[]>(
-    `SELECT d.code, d.label_zh FROM \`dict\` d
+  return cached('dict:genres', DICT_TTL_MS, async () => {
+    const [rows] = await getPool().query<RowDataPacket[]>(
+      `SELECT d.code, d.label_zh FROM \`dict\` d
      WHERE d.group_code = ? AND EXISTS (SELECT 1 FROM \`movie_attrs\` a WHERE a.dict_id = d.id)
      ORDER BY d.sort_order, d.id`,
-    [GENRE_GROUP]
-  )
-  return rows.map((row) => ({ code: String(row.code ?? ''), name: String(row.label_zh ?? '') }))
+      [GENRE_GROUP]
+    )
+    return rows.map((row) => ({ code: String(row.code ?? ''), name: String(row.label_zh ?? '') }))
+  })
 }
 
 /** 近 N 天内「已上架」的影片与剧集，按入库时间倒序。 */
 export async function listLatest(params: {
+  days: number
+  limit?: number
+}): Promise<{ items: PublicCarouselCard[]; total: number }> {
+  return cached(`latest:${params.days}:${params.limit ?? 'all'}`, LATEST_TTL_MS, () =>
+    loadLatestUncached(params)
+  )
+}
+
+/** 最新上架直查实现（不缓存）；缓存与缓存键由 listLatest 负责。 */
+async function loadLatestUncached(params: {
   days: number
   limit?: number
 }): Promise<{ items: PublicCarouselCard[]; total: number }> {
@@ -809,6 +860,11 @@ export async function listLatest(params: {
 
 /** 影人详情：基础资料 + 参演 / 参与制作的影片与剧集（按年份倒序）。 */
 export async function getPersonDetail(id: number): Promise<PublicPersonDetail | null> {
+  return cached(`person:${id}`, DETAIL_TTL_MS, () => loadPersonDetailUncached(id))
+}
+
+/** 影人详情直查实现（不缓存）；缓存与缓存键由 getPersonDetail 负责。 */
+async function loadPersonDetailUncached(id: number): Promise<PublicPersonDetail | null> {
   const [personRows] = await getPool().query<RowDataPacket[]>(
     `SELECT id, tmdb_id, imdb_id, name, english_name, gender, profile_url, birthday, deathday,
             place_of_birth, nationality, school, biography, biography_zh, known_for
@@ -896,5 +952,52 @@ export async function getPersonDetail(id: number): Promise<PublicPersonDetail | 
     knownFor: str(person.known_for) ?? 'Acting',
     biography: str(person.biography_zh) ?? str(person.biography),
     credits,
+  }
+}
+
+/**
+ * 预热首页热点缓存：题材字典、题材清单、首页轮播、最新上架。
+ * 服务启动后在后台执行，使首个真实请求也能命中缓存
+ * —— 否则冷启动后的第一个首页请求仍要等十几秒。
+ *
+ * 随后按首屏实际下发的目标，继续预热其详情 / 专题页，
+ * 让用户点进卡片时同样命中缓存（冷路径也一并抹平）。
+ */
+export async function warmContentCache(): Promise<void> {
+  const [carousels, latest] = await Promise.all([
+    listPublicCarousels({ placement: 'home', pageId: null }).catch(() => [] as PublicCarousel[]),
+    listLatest({ days: DEFAULT_LATEST_DAYS, limit: 10 }).catch(() => ({
+      items: [] as PublicCarouselCard[],
+      total: 0,
+    })),
+  ])
+  // 字典与题材清单：并行预热，互不阻塞
+  void loadGenreLabelMap().catch(() => undefined)
+  void listGenres().catch(() => undefined)
+
+  const titleIds = new Set<number>()
+  const collectionIds = new Set<number>()
+  for (const carousel of carousels) {
+    for (const item of carousel.items) {
+      if (item.targetType === 'collection') collectionIds.add(item.targetId)
+      else titleIds.add(item.targetId)
+    }
+  }
+  for (const item of latest.items) titleIds.add(item.targetId)
+
+  await Promise.all([
+    warmInChunks([...titleIds], 3, getTitleDetail),
+    warmInChunks([...collectionIds], 1, getCollectionDetail),
+  ])
+}
+
+/** 分批预热，避免并发过高挤占连接池（连接池上限 10）。 */
+async function warmInChunks<T>(
+  ids: number[],
+  size: number,
+  task: (id: number) => Promise<T>
+): Promise<void> {
+  for (let index = 0; index < ids.length; index += size) {
+    await Promise.allSettled(ids.slice(index, index + size).map(task))
   }
 }

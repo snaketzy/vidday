@@ -14,7 +14,7 @@ import { createServer } from 'vite'
 // 固定用 5270 起，避开 5173/5174 等其他项目常用的端口；被占用时 Vite 自动向上顺延
 const DEV_PORT = 5270
 // 后台服务端口，与 server/.env 的 PORT 保持一致
-const BACKEND_PORT = 8790
+const BACKEND_PORT = 8791
 const BACKEND_HEALTH = `http://127.0.0.1:${BACKEND_PORT}/health`
 const projectRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 
