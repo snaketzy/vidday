@@ -36,6 +36,7 @@ import {
 import {
   addToMyList,
   deleteProgress,
+  deleteProgressMany,
   listMyList,
   listProgress,
   removeFromMyList,
@@ -178,9 +179,14 @@ export const publicRoutes: FastifyPluginAsync = async (app) => {
     const cards = await cardsForTitleIds(records.map((record) => record.titleId))
 
     const items: PublicWatchProgress[] = []
+    // 取不到卡片 = 影片已下架或已删除，顺手清掉该类残留记录，避免脏行堆积
+    const stale: number[] = []
     for (const record of records) {
       const card = cards.get(record.titleId)
-      if (!card) continue
+      if (!card) {
+        stale.push(record.titleId)
+        continue
+      }
       items.push({
         ...card,
         episodeId: record.episodeId,
@@ -190,6 +196,7 @@ export const publicRoutes: FastifyPluginAsync = async (app) => {
         updatedAt: record.updatedAt,
       })
     }
+    if (stale.length) void deleteProgressMany(deviceId, stale).catch(() => undefined)
     const body: PublicProgressResponse = { schemaVersion: PUBLIC_SCHEMA_VERSION, items }
     return body
   })

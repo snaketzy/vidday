@@ -116,6 +116,20 @@ export async function deleteProgress(deviceId: string, titleId: number): Promise
   )
 }
 
+/**
+ * 批量删除某设备的多条进度。
+ * 用于清理目标影片已下架 / 已删除的残留记录，避免脏行无限堆积。
+ */
+export async function deleteProgressMany(deviceId: string, titleIds: number[]): Promise<void> {
+  const ids = [...new Set(titleIds.filter((id) => Number.isInteger(id) && id > 0))]
+  if (!ids.length) return
+  const placeholders = ids.map(() => '?').join(', ')
+  await getPool().query(
+    `DELETE FROM \`watch_progress\` WHERE \`device_id\` = ? AND \`title_id\` IN (${placeholders})`,
+    [deviceId, ...ids]
+  )
+}
+
 /* ------------------------------------------------------------------ *
  * 我的片单
  * ------------------------------------------------------------------ */

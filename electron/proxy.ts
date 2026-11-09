@@ -37,6 +37,19 @@ const PROXY_GROUP = 'PROXY'
 const MANUAL_GROUP = '手动切换'
 const AUTO_GROUP = '自动选择'
 const FALLBACK_GROUP = '故障转移'
+/** 自动选择组支持的策略；mihomo 解析到未知策略会让整个配置解析失败，故需白名单校验 */
+const AUTO_STRATEGIES = ['url-test', 'round-robin', 'consistent-hashing', 'sticky-sessions'] as const
+type AutoStrategy = (typeof AUTO_STRATEGIES)[number]
+/**
+ * 自动选择组默认策略。url-test 选择延迟最低的可用节点；负载均衡策略可供需要分摊时覆盖：
+ * consistent-hashing 按 eTLD+1 哈希、sticky-sessions 按「源IP+目标」哈希，
+ * 而本应用所有媒体都在同一域名下，两者都会把请求固定到同一个节点；round-robin 会在节点间轮换。
+ */
+const DEFAULT_AUTO_STRATEGY: AutoStrategy = 'url-test'
+/** 延迟优选仅在新节点至少快出此毫秒数时切换，避免微小抖动导致频繁切换 */
+const AUTO_TEST_TOLERANCE_MS = 50
+/** 健康检查请求超时（毫秒），不是精确 RTT 筛选值；0 表示不设置超时 */
+const DEFAULT_AUTO_MAX_DELAY_MS = 300
 /** 订阅 provider 名，需与 buildConfig 中的 key 一致 */
 const SUBSCRIPTION_PROVIDER = 'subscription'
 /** mihomo 不为 provider 内的节点提供独立 /proxies/{node} 资源，用隐藏 selector 做单节点测速。 */
@@ -109,6 +122,10 @@ interface LinesConfig {
   proxies?: ProxyLine[]
   /** 是否改用本机（系统）网络：true 时本应用不经内核转发，恢复跟随系统代理 */
   useHostNetwork?: boolean
+  /** 「自动选择」组策略，默认 url-test（最低延迟优选） */
+  autoStrategy?: AutoStrategy
+  /** 自动组健康检查请求超时（毫秒），不是精确 RTT 筛选值；0 表示不设置 */
+  autoMaxDelayMs?: number
   /** 覆盖默认端口 */
   mixedPort?: number
   controllerPort?: number
@@ -336,6 +353,20 @@ export function setHostNetworkMode(hostNetwork: boolean): ProxyStatus {
   return status
 }
 
+/** 解析自动选择组的策略：非法值回落默认，避免 mihomo 因未知策略拒绝整份配置。 */
+function resolveAutoStrategy(value?: string): AutoStrategy {
+  return AUTO_STRATEGIES.includes(value as AutoStrategy)
+    ? (value as AutoStrategy)
+    : DEFAULT_AUTO_STRATEGY
+}
+
+/** 解析延迟门槛：缺省用默认值，显式填 0 或非法值视为不启用。 */
+function resolveAutoMaxDelay(value?: number): number {
+  if (value === undefined) return DEFAULT_AUTO_MAX_DELAY_MS
+  if (!Number.isFinite(value) || value <= 0) return 0
+  return Math.round(value)
+}
+
 /**
  * 生成 mihomo 配置。
  * mihomo 用 YAML 解析器，而 JSON 是 YAML 子集，直接写 JSON 可规避手写 YAML 的转义问题。
@@ -344,6 +375,8 @@ function buildConfig(config: LinesConfig): { text: string; hasNodes: boolean } {
   const staticProxies = config.proxies ?? []
   const useSubscription = Boolean(config.subscriptionUrl)
   const hasNodes = useSubscription || staticProxies.length > 0
+  const autoStrategy = resolveAutoStrategy(config.autoStrategy)
+  const autoMaxDelayMs = resolveAutoMaxDelay(config.autoMaxDelayMs)
 
   const body: Record<string, unknown> = {
     'mixed-port': mixedPort,
@@ -366,7 +399,14 @@ function buildConfig(config: LinesConfig): { text: string; hasNodes: boolean } {
         // 订阅由主进程拉取并入盘，内核只读本地文件；文件支持 Clash YAML 与 base64 订阅
         type: 'file',
         path: subscriptionFilePath(),
-        'health-check': { enable: true, url: DELAY_TEST_URL, interval: 300 },
+        'health-check': {
+          enable: true,
+          url: DELAY_TEST_URL,
+          interval: 300,
+          // 组级 timeout 不会传导给 use 引入的节点，延迟门槛必须配在 provider 上；
+          // 同时关掉 lazy，保证每个周期都测全量节点，门槛才有可靠依据。
+          ...(autoMaxDelayMs > 0 ? { timeout: autoMaxDelayMs, lazy: false } : {}),
+        },
       },
     }
   }
@@ -378,16 +418,20 @@ function buildConfig(config: LinesConfig): { text: string; hasNodes: boolean } {
       if (useSubscription) group.use = [SUBSCRIPTION_PROVIDER]
       return group
     }
+    const autoGroup = withSources({
+      name: AUTO_GROUP,
+      type: autoStrategy === 'url-test' ? 'url-test' : 'load-balance',
+      ...(autoStrategy === 'url-test'
+        ? { tolerance: AUTO_TEST_TOLERANCE_MS }
+        : { strategy: autoStrategy }),
+      url: DELAY_TEST_URL,
+      interval: 300,
+      // 门槛作用于 proxies 字段的静态节点；订阅节点走 provider 的 health-check.timeout
+      ...(autoMaxDelayMs > 0 ? { timeout: autoMaxDelayMs } : {}),
+    })
     const groups: Record<string, unknown>[] = [
-      // 「自动选择」置顶：PROXY_GROUP 是 select 组，默认选中 proxies 第一项，
-      // 因此排在首位即代表默认走自动选最优节点；用户手选后由 store-selected 记住。
-      withSources({
-        name: AUTO_GROUP,
-        type: 'url-test',
-        url: DELAY_TEST_URL,
-        interval: 300,
-        tolerance: 50,
-      }),
+      // 「自动选择」置顶：PROXY_GROUP 是 select 组，默认选中 proxies 第一项。
+      autoGroup,
       withSources({ name: MANUAL_GROUP, type: 'select' }),
       withSources({
         name: FALLBACK_GROUP,

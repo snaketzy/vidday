@@ -6,6 +6,7 @@ import {
   CircleDot,
   Loader2,
   MapPin,
+  Network,
   RefreshCw,
   RotateCw,
   Save,
@@ -30,10 +31,12 @@ const GROUP_ICONS: Record<string, typeof CircleDot> = {
   Selector: CircleDot,
   URLTest: Activity,
   Fallback: ShieldCheck,
+  LoadBalance: Network,
 }
 
 function groupTypeLabel(type: string): string {
-  if (type === 'URLTest') return '自动选择'
+  if (type === 'URLTest') return '延迟优选'
+  if (type === 'LoadBalance') return '负载均衡'
   if (type === 'Fallback') return '故障转移'
   return '手动切换'
 }

@@ -314,19 +314,26 @@ async function loadCardContext(need: Need): Promise<CardContext> {
   return { genreMap, movies, movieGenres, series, seriesGenres, seriesPlay, collections, collectionCovers }
 }
 
+/**
+ * 批量取影片行。已下架（status ≠ published）的影片一律取不到行，
+ * 从而在轮播 / 最新 / 详情 / 用户侧进度与片单等所有卡片出口统一失效。
+ */
 async function loadMovieRows(ids: number[]): Promise<Map<number, MovieRow>> {
   if (!ids.length) return new Map()
   const [rows] = await getPool().query<MovieRow[]>(
-    `SELECT ${MOVIE_COLUMNS} FROM \`movies\` WHERE id IN (${placeholders(ids.length)})`,
+    `SELECT ${MOVIE_COLUMNS} FROM \`movies\`
+     WHERE id IN (${placeholders(ids.length)}) AND status = 'published'`,
     ids
   )
   return new Map(rows.map((row) => [intOr(row.id), row]))
 }
 
+/** 批量取剧集行；下架口径同 {@link loadMovieRows}。 */
 async function loadSeriesRows(ids: number[]): Promise<Map<number, SeriesRow>> {
   if (!ids.length) return new Map()
   const [rows] = await getPool().query<SeriesRow[]>(
-    `SELECT ${SERIES_COLUMNS} FROM \`series\` WHERE id IN (${placeholders(ids.length)})`,
+    `SELECT ${SERIES_COLUMNS} FROM \`series\`
+     WHERE id IN (${placeholders(ids.length)}) AND status = 'published'`,
     ids
   )
   return new Map(rows.map((row) => [intOr(row.id), row]))
