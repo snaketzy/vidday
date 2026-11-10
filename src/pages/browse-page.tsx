@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { RotateCcw } from 'lucide-react'
 import { useSearchParams } from 'react-router'
 
@@ -12,6 +12,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { genreName } from '@/data/genres'
+import { useAllTitles } from '@/hooks/use-all-titles'
 import { useGenres } from '@/hooks/use-genres'
 import { useLatestTitles } from '@/hooks/use-latest-titles'
 import { filterTitles, isKidsTitle, type CatalogFilters, type SortBy } from '@/lib/catalog'
@@ -48,8 +49,36 @@ export function BrowsePage() {
   const latestOnly = Number.isInteger(latestDays) && latestDays > 0
   const { status: latestStatus, titles: latestTitles } = useLatestTitles(latestOnly ? latestDays : null)
 
-  /** 切到「最新上架」数据源且尚未返回时，展示占位而非「共 0 部作品」 */
-  const loading = latestOnly && latestStatus === 'loading'
+  /**
+   * catalog 不持久化，默认只含首页轮播 / 最新上架等已访问过的子集。
+   * 本页是「全库」入口，故向服务端分页拉取（每批 25 条），滚动到底自动续下一批。
+   */
+  const {
+    status: allStatus,
+    loaded,
+    total,
+    hasMore,
+    loadingMore,
+    loadMore,
+  } = useAllTitles(!latestOnly)
+
+  /** 触底哨兵：提前 600px 预取下一批，滚动不出现空窗 */
+  const sentinelRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    const node = sentinelRef.current
+    if (!node || !hasMore) return
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) loadMore()
+      },
+      { rootMargin: '600px 0px' },
+    )
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [hasMore, loadMore])
+
+  /** 「最新上架」数据源尚未返回时展示占位，避免短暂显示「共 0 部作品」 */
+  const loading = latestOnly ? latestStatus === 'loading' : allStatus === 'loading'
 
   const filters: CatalogFilters = useMemo(
     () => ({
@@ -78,6 +107,16 @@ export function BrowsePage() {
     [pool, filters, kidsOnly, latestOnly],
   )
 
+  /** 分批渲染：只渲染已拉取的批次，其余随滚动追加（`latestOnly` 数据量已受限，不切） */
+  const visible = latestOnly ? results : results.slice(0, loaded)
+
+  /** 类型 / 题材 / 儿童模式会改变条数，需要全量才能给出准确数字，此时把剩余批次补齐 */
+  const countScoped = Boolean(typeParam || genreParam || kidsOnly)
+  useEffect(() => {
+    if (latestOnly || !countScoped || !hasMore) return
+    loadMore()
+  }, [latestOnly, countScoped, hasMore, loadMore])
+
   const update = (key: string, value: string | null) => {
     const next = new URLSearchParams(searchParams)
     if (value) next.set(key, value)
@@ -86,6 +125,8 @@ export function BrowsePage() {
   }
 
   const hasFilters = Boolean(genreParam || typeParam || sortParam || addedWithinParam)
+  /** 无筛选时用后端全库总数，避免随滚动增长的数字被误读成「只有这么多」 */
+  const shownCount = latestOnly || countScoped ? results.length : total
 
   return (
     <div className="min-h-[70vh] pb-12 pt-24 md:pt-28">
@@ -94,7 +135,7 @@ export function BrowsePage() {
           {activeGenreName ?? (latestOnly ? '最新上架' : '浏览全部作品')}
         </h1>
         <p className="mt-1 text-sm text-white/50">
-          {loading ? '正在加载…' : `共 ${results.length} 部作品`}
+          {loading ? '正在加载…' : `共 ${shownCount} 部作品`}
           {latestOnly ? ` · 近 ${latestDays} 天内上架` : ''}
           {activeGenreName ? ` · ${activeGenreName}` : ''}
         </p>
@@ -164,8 +205,17 @@ export function BrowsePage() {
       <div className="mt-8">
         {loading ? (
           <TitleGridSkeleton />
-        ) : results.length ? (
-          <TitleGrid titles={results} />
+        ) : visible.length ? (
+          <>
+            <TitleGrid titles={visible} />
+            {/* 触底哨兵 + 下一批占位：滚到这里自动续拉 25 条 */}
+            {hasMore ? (
+              <>
+                <div ref={sentinelRef} aria-hidden className="h-px" />
+                {loadingMore ? <TitleGridSkeleton count={5} /> : null}
+              </>
+            ) : null}
+          </>
         ) : (
           <div className="px-4 py-20 text-center md:px-12">
             <p className="text-sm text-white/60">没有符合条件的作品，试试放宽筛选条件。</p>

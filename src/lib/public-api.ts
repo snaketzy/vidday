@@ -178,6 +178,12 @@ export interface PublicLatest {
   items: PublicCarouselCard[]
 }
 
+/** 全量目录：全部后台「已上架」内容，按入库时间倒序。 */
+export interface PublicAllTitles {
+  total: number
+  items: PublicCarouselCard[]
+}
+
 /**
  * 观看进度条目：卡片摘要叠加进度字段。
  * 后端随进度一并下发卡片，前台启动时可据此重建目录条目（catalog 不持久化）。
@@ -646,6 +652,26 @@ export async function fetchLatest(
   const body = unwrap(await getJson(`/public/latest?${search.toString()}`, signal))
   return {
     days: num(body.days) ?? params.days,
+    total: num(body.total) ?? 0,
+    items: normalizeCards(body.items),
+  }
+}
+
+/**
+ * 全量目录（影片 + 剧集，仅后台「已上架」状态），按入库时间倒序。
+ * 供「浏览全部作品」分批拉取；`limit` 缺省返回剩余全部，`total` 始终是全库总数。
+ */
+export async function fetchAllTitles(
+  params: { limit?: number; offset?: number } = {},
+  signal?: AbortSignal,
+): Promise<PublicAllTitles> {
+  const search = new URLSearchParams()
+  if (params.limit !== undefined) search.set('limit', String(params.limit))
+  if (params.offset !== undefined) search.set('offset', String(params.offset))
+  const query = search.toString()
+
+  const body = unwrap(await getJson(`/public/titles${query ? `?${query}` : ''}`, signal))
+  return {
     total: num(body.total) ?? 0,
     items: normalizeCards(body.items),
   }

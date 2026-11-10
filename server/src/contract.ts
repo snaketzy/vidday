@@ -147,6 +147,13 @@ export interface PublicLatestResponse {
   items: PublicCarouselCard[]
 }
 
+/** 全量目录：全部「已上架」状态的内容，按入库时间倒序。 */
+export interface PublicTitlesResponse {
+  schemaVersion: number
+  total: number
+  items: PublicCarouselCard[]
+}
+
 /** 观看进度条目：卡片摘要叠加进度字段。 */
 export interface PublicWatchProgress extends PublicCarouselCard {
   /** 剧集单集 id；影片为 null */

@@ -45,6 +45,7 @@ export const DEFAULT_LATEST_DAYS = 7
 const DICT_TTL_MS = 30 * 60_000
 const CAROUSEL_TTL_MS = 5 * 60_000
 const LATEST_TTL_MS = 2 * 60_000
+const CATALOG_TTL_MS = 5 * 60_000
 const DETAIL_TTL_MS = 5 * 60_000
 
 /* ------------------------------------------------------------------ *
@@ -824,6 +825,56 @@ export async function listLatest(params: {
   return cached(`latest:${params.days}:${params.limit ?? 'all'}`, LATEST_TTL_MS, () =>
     loadLatestUncached(params)
   )
+}
+
+/** 全量目录：全部「已上架」影片与剧集，按入库时间倒序，供「浏览全部作品」使用。 */
+export async function listAllTitles(params: { limit?: number; offset?: number } = {}): Promise<{
+  items: PublicCarouselCard[]
+  total: number
+}> {
+  return cached(
+    `titles:all:${params.limit ?? 'all'}:${params.offset ?? 0}`,
+    CATALOG_TTL_MS,
+    () => loadAllTitlesUncached(params)
+  )
+}
+
+/** 全量目录直查实现（不缓存）；缓存与缓存键由 listAllTitles 负责。 */
+async function loadAllTitlesUncached(params: {
+  limit?: number
+  offset?: number
+}): Promise<{ items: PublicCarouselCard[]; total: number }> {
+  const [rows] = await getPool().query<RowDataPacket[]>(
+    `SELECT 'movie' AS target_type, id, created_at FROM \`movies\` WHERE status = 'published'
+     UNION ALL
+     SELECT 'series' AS target_type, id, created_at FROM \`series\` WHERE status = 'published'
+     ORDER BY created_at DESC`
+  )
+
+  // 总数不受分页影响；本表规模有限（百量级），在内存里切片即可
+  const total = rows.length
+  const offset = Math.max(0, params.offset ?? 0)
+  const page = params.limit
+    ? rows.slice(offset, offset + params.limit)
+    : rows.slice(offset)
+
+  const movieIds: number[] = []
+  const seriesIds: number[] = []
+  for (const row of page) {
+    if (row.target_type === 'movie') movieIds.push(intOr(row.id))
+    else seriesIds.push(intOr(row.id))
+  }
+  const ctx = await loadCardContext({ movieIds, seriesIds })
+
+  const items: PublicCarouselCard[] = []
+  for (const row of page) {
+    const card =
+      row.target_type === 'movie'
+        ? cardFromContext(ctx, 'movie', intOr(row.id))
+        : cardFromContext(ctx, 'series', intOr(row.id))
+    if (card) items.push(card)
+  }
+  return { items, total }
 }
 
 /** 最新上架直查实现（不缓存）；缓存与缓存键由 listLatest 负责。 */

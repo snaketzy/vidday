@@ -20,6 +20,7 @@ import {
   type PublicProxyConfigResponse,
   type PublicTitleCreditsResponse,
   type PublicTitleResponse,
+  type PublicTitlesResponse,
   type PublicWatchProgress,
 } from '../contract.ts'
 import {
@@ -29,6 +30,7 @@ import {
   getCollectionDetail,
   getTitleCredits,
   getTitleDetail,
+  listAllTitles,
   listGenres,
   listLatest,
   listPublicCarousels,
@@ -53,6 +55,8 @@ const DEVICE_ID_PATTERN = /^[A-Za-z0-9._-]{8,64}$/
 /** 「最新上架」窗口与条数上限。 */
 const MAX_LATEST_DAYS = 90
 const MAX_LATEST_LIMIT = 200
+/** 全量目录单页上限（前台「浏览全部作品」按 25 条一批拉取）。 */
+const MAX_TITLES_LIMIT = 200
 
 /** 取并校验设备标识；缺失或非法直接 400。 */
 function requireDeviceId(headers: Record<string, unknown>): string {
@@ -164,6 +168,38 @@ export const publicRoutes: FastifyPluginAsync = async (app) => {
 
     const { items, total } = await listLatest({ days, limit })
     const body: PublicLatestResponse = { schemaVersion: PUBLIC_SCHEMA_VERSION, days, total, items }
+    return body
+  })
+
+  /**
+   * 全量目录：全部「已上架」影片与剧集，按入库时间倒序，供「浏览全部作品」分页渲染。
+   * `limit` 缺省返回剩余全部；`total` 始终是全库总数。
+   */
+  app.get<{ Querystring: Record<string, unknown> }>('/titles', async (request) => {
+    let limit: number | undefined
+    if (request.query.limit !== undefined) {
+      const value = Number(request.query.limit)
+      if (!Number.isInteger(value) || value <= 0 || value > MAX_TITLES_LIMIT) {
+        throw badRequest(`limit 取值非法：应为 1~${MAX_TITLES_LIMIT} 的整数`)
+      }
+      limit = value
+    }
+
+    let offset = 0
+    if (request.query.offset !== undefined) {
+      const value = Number(request.query.offset)
+      if (!Number.isInteger(value) || value < 0) {
+        throw badRequest('offset 取值非法：应为不小于 0 的整数')
+      }
+      offset = value
+    }
+
+    const { items, total } = await listAllTitles({ limit, offset })
+    const body: PublicTitlesResponse = {
+      schemaVersion: PUBLIC_SCHEMA_VERSION,
+      total,
+      items,
+    }
     return body
   })
 
