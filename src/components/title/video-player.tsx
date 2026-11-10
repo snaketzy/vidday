@@ -84,6 +84,12 @@ const CONTROLS_TIMEOUT = 3200
 const VOLUME_STEP = 0.05
 /** 音量调整状态层的停留时长 */
 const VOLUME_OSD_TIMEOUT = 1000
+/** 左右键快进 / 快退的单步步长（秒） */
+const SEEK_STEP = 10
+/** 快进 / 快退状态层的停留时长 */
+const SEEK_OSD_TIMEOUT = 900
+/** 播放 / 暂停中央图标闪现的停留时长 */
+const PLAYBACK_OSD_TIMEOUT = 700
 
 /**
  * 外挂 PGS 字幕：远端在与 master 同级的 `pgs-subs/` 下放一份 index.json 清单。
@@ -527,6 +533,17 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
   /** 音量调整状态层：按上下键时短暂显示，值为 0-1；null 表示隐藏 */
   const [volumeOsd, setVolumeOsd] = useState<number | null>(null)
   const volumeOsdTimer = useRef<number | undefined>(undefined)
+  /**
+   * 播放 / 暂停状态层：值为切换后的动作图标；null 表示隐藏。
+   * 键盘模式下控制栏不弹出，靠它给一次中央图标闪现作为反馈。
+   */
+  const [playbackOsd, setPlaybackOsd] = useState<'play' | 'pause' | null>(null)
+  const playbackOsdTimer = useRef<number | undefined>(undefined)
+  /** 快进 / 快退状态层：按左右键时短暂显示目标时间 */
+  const [seekOsd, setSeekOsd] = useState<{ forward: boolean; target: number } | null>(null)
+  const seekOsdTimer = useRef<number | undefined>(undefined)
+  /** 当前是否由键盘驱动：为真时键盘操作不主动唤出控制栏，鼠标一动即恢复指针驱动 */
+  const keyboardDrivenRef = useRef(false)
   const setContainerRef = useCallback((element: HTMLDivElement | null) => {
     containerRef.current = element
     setMenuPortalContainer(element)
@@ -1109,6 +1126,13 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
     else void el.requestFullscreen?.()
   }, [])
 
+  /** 播放 / 暂停中央图标闪现：键盘模式下控制栏不弹出，用一次短暂图标给出反馈 */
+  const showPlaybackOsd = useCallback((action: 'play' | 'pause') => {
+    setPlaybackOsd(action)
+    if (playbackOsdTimer.current) window.clearTimeout(playbackOsdTimer.current)
+    playbackOsdTimer.current = window.setTimeout(() => setPlaybackOsd(null), PLAYBACK_OSD_TIMEOUT)
+  }, [])
+
   const togglePlayback = useCallback(() => {
     const video = videoRef.current
     if (!video) return
@@ -1118,10 +1142,12 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
         dispatch(seek(0))
       }
       startPlayback()
+      showPlaybackOsd('pause')
       return
     }
     video.pause()
-  }, [dispatch, startPlayback])
+    showPlaybackOsd('play')
+  }, [dispatch, showPlaybackOsd, startPlayback])
 
   /** 音量步进：控制音量并唤出播放器上的音量状态层 */
   const adjustVolume = useCallback(
@@ -1139,6 +1165,8 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
   useEffect(
     () => () => {
       if (volumeOsdTimer.current) window.clearTimeout(volumeOsdTimer.current)
+      if (playbackOsdTimer.current) window.clearTimeout(playbackOsdTimer.current)
+      if (seekOsdTimer.current) window.clearTimeout(seekOsdTimer.current)
     },
     [],
   )
@@ -1167,13 +1195,29 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
     [seekTo],
   )
 
+  /** 快进 / 快退状态层：跳转后读取落点时间并短暂显示（键盘盲跳时的唯一反馈） */
+  const showSeekOsd = useCallback((forward: boolean) => {
+    const video = videoRef.current
+    if (!video) return
+    setSeekOsd({ forward, target: video.currentTime })
+    if (seekOsdTimer.current) window.clearTimeout(seekOsdTimer.current)
+    seekOsdTimer.current = window.setTimeout(() => setSeekOsd(null), SEEK_OSD_TIMEOUT)
+  }, [])
+
   const wake = useCallback(() => {
-    dispatch(setControlsVisible(true))
+    // 键盘驱动期间不主动显示控制栏，但仍维持自动隐藏计时，避免控件卡在屏上
+    if (!keyboardDrivenRef.current) dispatch(setControlsVisible(true))
     if (hideTimer.current) window.clearTimeout(hideTimer.current)
     if (playerRef.current.isPlaying) {
       hideTimer.current = window.setTimeout(() => dispatch(setControlsVisible(false)), CONTROLS_TIMEOUT)
     }
   }, [dispatch])
+
+  /** 指针交互：退出键盘驱动模式，恢复「一动鼠标即出控制栏」 */
+  const wakeFromPointer = useCallback(() => {
+    keyboardDrivenRef.current = false
+    wake()
+  }, [wake])
 
   useEffect(() => {
     wake()
@@ -1207,7 +1251,7 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
       event.preventDefault()
       // 广告时段不响应右键，与生产环境表现一致
       if (adActiveRef.current) return
-      wake()
+      wakeFromPointer()
       const rect = containerRef.current?.getBoundingClientRect()
       const menuWidth = 196
       const menuHeight = STATS_FOR_NERDS_ENABLED ? 92 : 52
@@ -1215,7 +1259,7 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
       const y = rect ? Math.min(event.clientY - rect.top, rect.height - menuHeight - 12) : event.clientY
       setContextMenu({ x: Math.max(12, x), y: Math.max(12, y) })
     },
-    [wake],
+    [wakeFromPointer],
   )
 
   const refreshNerdStats = useCallback(() => {
@@ -1295,6 +1339,8 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return
+      // 进入键盘驱动模式：后续键盘操作不再主动弹出控制栏（鼠标一动即退出该模式）
+      keyboardDrivenRef.current = true
       if (event.key === 'Escape' && contextMenu) {
         event.preventDefault()
         closeContextMenu()
@@ -1317,10 +1363,14 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
           togglePlayback()
           break
         case 'ArrowRight':
-          seekRelative(10)
+          event.preventDefault()
+          seekRelative(SEEK_STEP)
+          showSeekOsd(true)
           break
         case 'ArrowLeft':
-          seekRelative(-10)
+          event.preventDefault()
+          seekRelative(-SEEK_STEP)
+          showSeekOsd(false)
           break
         case 'ArrowUp':
           event.preventDefault()
@@ -1333,7 +1383,10 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
         case 'm':
           dispatch(toggleMute())
           break
+        case 'Enter':
         case 'f':
+          // preventDefault 同时抑制焦点按钮（如整屏播放热区）的 Enter 激活，避免与全屏动作重复触发
+          event.preventDefault()
           toggleFullscreen()
           break
         case 'Escape':
@@ -1346,7 +1399,7 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [adjustVolume, closeContextMenu, contextMenu, dispatch, navigate, seekRelative, statsVisible, toggleFullscreen, togglePlayback, wake])
+  }, [adjustVolume, closeContextMenu, contextMenu, dispatch, navigate, seekRelative, showSeekOsd, statsVisible, toggleFullscreen, togglePlayback, wake])
 
   /* 播放结束：自动播放下一集 */
   useEffect(() => {
@@ -1373,7 +1426,7 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
         'relative h-screen w-screen select-none overflow-hidden bg-black text-white',
         hideCursor ? 'cursor-none' : 'cursor-default',
       )}
-      onMouseMove={wake}
+      onMouseMove={wakeFromPointer}
       onContextMenu={openContextMenu}
     >
       <video
@@ -1496,6 +1549,39 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
             <span className="w-9 text-right text-xs tabular-nums text-white/80">
               {Math.round(volumeOsd * 100)}%
             </span>
+          </div>
+        </div>
+      ) : null}
+
+      {/*
+        播放 / 暂停状态层：键盘切换播放时中央闪现一次图标。
+        仅控制栏隐藏（键盘驱动）时展示——指针交互时上方图标层已常驻同一图标，无需重复。
+      */}
+      {playbackOsd && !player.controlsVisible && !player.buffering && !player.ended && !adActive ? (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 z-90 flex items-center justify-center"
+        >
+          <span className="flex size-20 items-center justify-center rounded-full bg-black/55 text-white backdrop-blur-sm md:size-24">
+            {playbackOsd === 'pause' ? (
+              <Pause className="size-9 fill-current" />
+            ) : (
+              <Play className="size-9 fill-current" />
+            )}
+          </span>
+        </div>
+      ) : null}
+
+      {/* 快进 / 快退状态层：按左右键时中央显示目标时间与步长 */}
+      {seekOsd ? (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 z-90 flex items-center justify-center"
+        >
+          <div className="flex flex-col items-center gap-2 rounded-2xl bg-black/60 px-7 py-4 text-white backdrop-blur">
+            {seekOsd.forward ? <RotateCw className="size-7" /> : <RotateCcw className="size-7" />}
+            <span className="text-lg font-semibold tabular-nums">{formatTime(seekOsd.target)}</span>
+            <span className="text-[11px] text-white/70">{`${seekOsd.forward ? '+' : '-'}${SEEK_STEP} 秒`}</span>
           </div>
         </div>
       ) : null}
