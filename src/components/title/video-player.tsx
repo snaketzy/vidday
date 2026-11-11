@@ -1447,7 +1447,7 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
       <button
         type="button"
         aria-label={player.isPlaying ? '暂停' : '播放'}
-        className={cn('absolute inset-0 z-60', hideCursor ? 'cursor-none' : 'cursor-default')}
+        className={cn('absolute inset-0 z-60 outline-none', hideCursor ? 'cursor-none' : 'cursor-default')}
         onClick={() => {
           togglePlayback()
           wake()

@@ -226,11 +226,14 @@ export type PublicApiErrorKind = 'network' | 'http' | 'contract'
 
 export class PublicApiError extends Error {
   kind: PublicApiErrorKind
+  /** HTTP 状态码；network / contract 这类非 HTTP 层错误为 null */
+  status: number | null
 
-  constructor(message: string, kind: PublicApiErrorKind) {
+  constructor(message: string, kind: PublicApiErrorKind, status: number | null = null) {
     super(message)
     this.name = 'PublicApiError'
     this.kind = kind
+    this.status = status
   }
 }
 
@@ -410,7 +413,7 @@ async function requestJson(path: string, options: RequestOptions = {}): Promise<
   }
 
   if (!response.ok) {
-    throw new PublicApiError(`内容服务返回 ${response.status}`, 'http')
+    throw new PublicApiError(`内容服务返回 ${response.status}`, 'http', response.status)
   }
 
   try {

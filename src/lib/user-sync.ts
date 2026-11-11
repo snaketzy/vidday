@@ -9,6 +9,8 @@
  *    {@link userSyncMiddleware} 统一挂钩，避免散落在各 UI 调用点漏报。
  *
  * 冲突判定：进度按 `updatedAt` 取新（与服务端 upsert 的幂等口径一致）；片单以并集为准。
+ * 回推若被服务端以 404 拒绝，说明目标已下架/已删除，就地删除本地条目，
+ * 否则已下架内容会因本地残留而长期留在「继续收看」/「我的片单」。
  */
 import type { Middleware, PayloadAction } from '@reduxjs/toolkit'
 
@@ -17,6 +19,7 @@ import {
   deleteProgress,
   fetchMyList,
   fetchProgress,
+  PublicApiError,
   putProgress,
   removeFromMyList,
   type PublicProgressUpsert,
@@ -25,8 +28,8 @@ import {
 import { cardToTitle } from '@/lib/title-adapter'
 import type { AppDispatch, RootState } from '@/store'
 import { upsertTitles } from '@/store/slices/catalog-slice'
-import { addTitle } from '@/store/slices/my-list-slice'
-import { recordProgress } from '@/store/slices/watch-slice'
+import { addTitle, removeTitle } from '@/store/slices/my-list-slice'
+import { recordProgress, removeProgress } from '@/store/slices/watch-slice'
 import type { WatchProgress } from '@/types'
 
 /** 前台的 titleId 为字符串；后端为整数，非法值（历史脏数据）直接忽略。 */
@@ -118,7 +121,12 @@ export async function hydrateUserData(
           duration: Math.round(entry.duration),
           percent: Math.min(100, Math.max(0, Math.round(entry.percent))),
           updatedAt: entry.updatedAt,
-        }).catch(() => undefined),
+        }).catch((error: unknown) => {
+          // 服务端 404 = 目标已下架/已删除：本地残留不会再被服务端接受，就地清除
+          if (error instanceof PublicApiError && error.status === 404) {
+            dispatch(removeProgress(entry.titleId))
+          }
+        }),
       )
     }
     await Promise.all(pushes)
@@ -132,11 +140,21 @@ export async function hydrateUserData(
     for (const id of serverIds) {
       if (!getState().myList.ids.includes(id)) dispatch(addTitle(id))
     }
+    const pushes: Promise<void>[] = []
     for (const id of getState().myList.ids) {
       if (serverIds.has(id)) continue
       const titleId = toTitleId(id)
-      if (titleId !== null) void addToMyList(titleId).catch(() => undefined)
+      if (titleId === null) continue
+      pushes.push(
+        addToMyList(titleId).catch((error: unknown) => {
+          // 服务端 404 = 目标已下架/已删除：本地残留不会再被服务端接受，就地清除
+          if (error instanceof PublicApiError && error.status === 404) {
+            dispatch(removeTitle(id))
+          }
+        }),
+      )
     }
+    await Promise.all(pushes)
   }
 }
 
