@@ -90,6 +90,8 @@ const SEEK_STEP = 10
 const SEEK_OSD_TIMEOUT = 900
 /** 播放 / 暂停中央图标闪现的停留时长 */
 const PLAYBACK_OSD_TIMEOUT = 700
+/** 方向键统一由播放器全局接管，可聚焦控件（如进度条）不再做自身步进 */
+const ARROW_KEYS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'])
 
 /**
  * 外挂 PGS 字幕：远端在与 master 同级的 `pgs-subs/` 下放一份 index.json 清单。
@@ -123,6 +125,14 @@ const AD_SOURCE = '/ads/ad-sample.mp4'
 const AD_INTERVAL = 60
 /** 广告可跳过前的强制观看时长（秒） */
 const AD_SKIP_AFTER = 5
+
+/**
+ * 起播 / 切档的「预缓冲闸门」：先攒够前向缓冲再出画面，避免起播即卡顿。
+ * 目标 10s；片尾剩余不足 10s 时以剩余时长为准；弱网下最多等 15s 兜底放行。
+ */
+const PRIME_TARGET_SEC = 10
+const PRIME_TIMEOUT_MS = 15_000
+const PRIME_POLL_MS = 100
 
 const controlClass = 'text-white hover:bg-white/15 focus-visible:ring-white/40'
 const menuClass = 'z-100 border-white/10 bg-[#181818] text-white'
@@ -519,6 +529,13 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
   /** 自适应模式下当前实际播放的轨道高度 */
   const [liveHeight, setLiveHeight] = useState<number | null>(null)
   const [mediaReady, setMediaReady] = useState(false)
+  /** 预缓冲闸门状态：非空时展示「初始化播放器 / 切换画质」提示 */
+  const [primeState, setPrimeState] = useState<{ label: string; buffered: number; target: number } | null>(null)
+  /** 闸门令牌：换片或再次切档时让上一个仍在等待的闸门立即失效 */
+  const primeTokenRef = useRef(0)
+  /** 切档闸门观测的轨道下标，及其已缓冲到的位置（秒，分片起点 + 时长） */
+  const targetLevelRef = useRef<number | null>(null)
+  const levelBufferedEndRef = useRef(0)
   /** 已缓冲到的位置（秒），用于进度条的缓冲层 */
   const [buffered, setBuffered] = useState(0)
   /** 是否正在播放中插广告 */
@@ -744,6 +761,15 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
     }
     hls.on(Hls.Events.FRAG_LOADED, recordFragLoad)
 
+    /* 切档闸门：记录目标档位已缓冲到的位置，用于判断新档位是否攒够前向缓冲 */
+    hls.on(
+      Hls.Events.FRAG_BUFFERED,
+      (_event, data: { frag: { level: number; start: number; duration: number } }) => {
+        if (targetLevelRef.current === null || data.frag.level !== targetLevelRef.current) return
+        levelBufferedEndRef.current = Math.max(levelBufferedEndRef.current, data.frag.start + data.frag.duration)
+      },
+    )
+
     hls.on(Hls.Events.ERROR, (_event, data) => {
       // 原本这里把 hls.js 的死因全吞了，出问题只能看到「黑屏」看不出为什么，开发期留痕
       if (import.meta.env.DEV) {
@@ -778,18 +804,6 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
     // 依赖必须带上 sourceUrl：否则改播放源后（含 Vite HMR）不会重建 hls 实例，
     // 页面会一直卡在旧源（例如已失效的 HEVC 流）上，表现为「换了源还是放不出来」
   }, [dispatch, sourceUrl])
-
-  /* 画质切档：auto 交还自适应，其余档位锁定到对应轨道 */
-  useEffect(() => {
-    const hls = hlsRef.current
-    if (!hls || levels.length === 0) return
-    if (player.quality === 'auto') {
-      hls.currentLevel = -1
-      return
-    }
-    const level = levels.find((item) => item.key === player.quality)
-    if (level) hls.currentLevel = level.index
-  }, [player.quality, levels])
 
   /* 原生 HLS（Safari 旧版）：从 video 元素读取真实字幕 / 音轨 */
   useEffect(() => {
@@ -970,6 +984,109 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
     if (video) setBuffered(bufferedWindow(video).end)
   }, [])
 
+  /**
+   * 预缓冲闸门：等前向缓冲攒够 PRIME_TARGET_SEC 秒再放行。
+   * 片尾剩余不足目标值时以剩余时长为准；弱网下最多等 PRIME_TIMEOUT_MS 兜底放行。
+   * 返回 true 表示可以起播（攒够或超时），false 表示已被更新的闸门取代。
+   */
+  const waitForBuffer = useCallback((label: string, level: number | null = null) => {
+    const video = videoRef.current
+    if (!video) return Promise.resolve(true)
+    const duration = Number.isFinite(video.duration) ? video.duration : 0
+    const remaining = duration > 0 ? duration - video.currentTime : Number.POSITIVE_INFINITY
+    const target = duration > 0 ? Math.min(PRIME_TARGET_SEC, remaining) : PRIME_TARGET_SEC
+    // 片尾只剩不到 1s 时没有可等的内容，直接放行
+    if (target <= 1) return Promise.resolve(true)
+
+    const token = (primeTokenRef.current += 1)
+    return new Promise<boolean>((resolve) => {
+      const startedAt = performance.now()
+      setPrimeState({ label, buffered: 0, target })
+
+      const settle = (ready: boolean) => {
+        if (token === primeTokenRef.current) setPrimeState(null)
+        resolve(ready)
+      }
+
+      const tick = () => {
+        if (token !== primeTokenRef.current) {
+          // 已有更新的闸门接管提示与起播，这里只静默退出
+          resolve(false)
+          return
+        }
+        const current = videoRef.current
+        if (!current || current !== video) {
+          settle(false)
+          return
+        }
+        const raw =
+          level !== null && targetLevelRef.current === level
+            ? levelBufferedEndRef.current - current.currentTime
+            : bufferedWindow(current).health
+        const ahead = Math.max(0, raw)
+        if (ahead >= target) {
+          settle(true)
+          return
+        }
+        if (performance.now() - startedAt >= PRIME_TIMEOUT_MS) {
+          if (import.meta.env.DEV) {
+            console.warn(
+              `[prime] ${label} 等待前向缓冲超时，兜底放行（${ahead.toFixed(1)}s / ${target.toFixed(1)}s）`,
+            )
+          }
+          settle(true)
+          return
+        }
+        setPrimeState({ label, buffered: ahead, target })
+        window.setTimeout(tick, PRIME_POLL_MS)
+      }
+
+      tick()
+    })
+  }, [])
+
+  /** 上一档已下发的画质：用于区分「首次装载」与「用户主动切档」 */
+  const lastAppliedQualityRef = useRef<string | null>(null)
+
+  /**
+   * 画质切档：auto 交还自适应，其余档位锁定到对应轨道。
+   * 用户主动切档且正在播放时先暂停，等新档位攒够前向缓冲再恢复，避免切档即卡顿。
+   */
+  useEffect(() => {
+    const hls = hlsRef.current
+    if (!hls || levels.length === 0) return
+
+    const apply = async () => {
+      if (player.quality === 'auto') {
+        lastAppliedQualityRef.current = 'auto'
+        hls.currentLevel = -1
+        return
+      }
+      const level = levels.find((item) => item.key === player.quality)
+      if (!level) return
+      const switched = lastAppliedQualityRef.current !== null && lastAppliedQualityRef.current !== player.quality
+      lastAppliedQualityRef.current = player.quality
+
+      const video = videoRef.current
+      // 首次装载 / 暂停状态下直接锁定档位，起播闸门由媒体就绪流程统一处理
+      if (!switched || !video || video.paused) {
+        hls.currentLevel = level.index
+        return
+      }
+
+      video.pause()
+      levelBufferedEndRef.current = video.currentTime
+      targetLevelRef.current = level.index
+      hls.currentLevel = level.index
+      const ready = await waitForBuffer('正在切换画质…', level.index)
+      targetLevelRef.current = null
+      if (!ready || hlsRef.current !== hls) return
+      startPlayback()
+    }
+
+    void apply()
+  }, [player.quality, levels, waitForBuffer, startPlayback])
+
   /** 结束广告：收起覆盖层并恢复正片播放 */
   const endAd = useCallback(() => {
     const ad = adVideoRef.current
@@ -1107,8 +1224,11 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
     video.muted = playerRef.current.muted
     video.playbackRate = playerRef.current.rate
     dispatch(seek(target))
-    startPlayback()
-  }, [mediaReady, title.id, episode?.id, dispatch, startPlayback])
+    /* 预缓冲闸门：先攒够前向缓冲再出画面，避免起播即卡顿 */
+    void waitForBuffer('正在初始化播放器…').then((ready) => {
+      if (ready) startPlayback()
+    })
+  }, [mediaReady, title.id, episode?.id, dispatch, waitForBuffer, startPlayback])
 
   /* 播放页禁止页面滚动 */
   useEffect(() => {
@@ -1459,7 +1579,7 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
         aria-hidden="true"
         className={cn(
           'pointer-events-none absolute inset-0 z-70 flex items-center justify-center transition-opacity duration-200',
-          player.controlsVisible && !player.buffering && !player.ended && !adActive
+          player.controlsVisible && !player.buffering && !player.ended && !adActive && !primeState
             ? 'opacity-100'
             : 'opacity-0',
         )}
@@ -1518,14 +1638,35 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
         </div>
       ) : null}
 
-      {/* 缓冲指示 */}
-      {player.buffering && player.isPlaying && !player.ended ? (
+      {/* 缓冲指示（预缓冲闸门有自己的提示层，二者互斥） */}
+      {player.buffering && player.isPlaying && !player.ended && !primeState && !adActive ? (
         <div className="pointer-events-none absolute inset-0 z-70 flex items-center justify-center">
           <span
             role="status"
             aria-label="缓冲中"
             className="size-10 animate-spin rounded-full border-2 border-white/25 border-t-white"
           />
+        </div>
+      ) : null}
+
+      {/* 预缓冲闸门提示：起播 / 切档时先攒够前向缓冲再出画面 */}
+      {primeState && !adActive ? (
+        <div className="pointer-events-none absolute inset-0 z-70 flex flex-col items-center justify-center gap-3 bg-black/20 px-8">
+          <span
+            role="status"
+            aria-label={primeState.label}
+            className="size-10 animate-spin rounded-full border-2 border-white/25 border-t-white"
+          />
+          <p className="text-sm text-white/85">{primeState.label}</p>
+          <div className="h-1 w-56 max-w-full overflow-hidden rounded-full bg-white/25">
+            <div
+              className="h-full rounded-full bg-white transition-[width] duration-200"
+              style={{ width: `${clampPercent(primeState.buffered, primeState.target)}%` }}
+            />
+          </div>
+          <p className="text-[11px] tabular-nums text-white/60">
+            {`${primeState.buffered.toFixed(1)}s / ${primeState.target.toFixed(1)}s`}
+          </p>
         </div>
       ) : null}
 
@@ -1713,6 +1854,14 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
             step={1}
             aria-label="播放进度"
             onValueChange={(value) => seekTo(value[0] ?? 0)}
+            /*
+             * 拖动进度条后滑块会持有焦点，此时 Radix Slider 会把方向键当作进度步进：
+             * 上下键会抢走播放器的音量快捷键，左右键还会与全局 ±10s 叠加成双重跳转。
+             * 拦掉默认行为，方向键统一交给播放器的全局快捷键处理。
+             */
+            onKeyDown={(event) => {
+              if (ARROW_KEYS.has(event.key)) event.preventDefault()
+            }}
             className="[&_[data-slot=slider-buffered]]:bg-[#a31621] [&_[data-slot=slider-range]]:bg-brand [&_[data-slot=slider-thumb]]:size-3 [&_[data-slot=slider-thumb]]:border-0 [&_[data-slot=slider-thumb]]:bg-brand [&_[data-slot=slider-track]]:h-1 [&_[data-slot=slider-track]]:bg-white/20"
           />
           <span className="w-14 shrink-0 text-xs tabular-nums text-white/55">
