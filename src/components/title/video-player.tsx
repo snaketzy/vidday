@@ -680,7 +680,19 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
     }
 
     // 固定前向缓冲区间，避免自适应把整片一次性缓冲完导致缓冲进度看不出边界
-    const hls = new Hls({ enableWorker: true, maxBufferLength: 30, maxMaxBufferLength: 60 })
+    const hls = new Hls({
+      enableWorker: true,
+      maxBufferLength: 30,
+      maxMaxBufferLength: 60,
+      /*
+       * 清单必须每次回源校验：播放地址是固定路径，覆盖式重新上传后 CDN 会继续命中旧 m3u8
+       * （缓存键忽略 query，加时间戳无效），导致分辨率档位、音轨名、内嵌字幕名不更新。
+       * 只对清单生效，分片保持默认缓存策略。
+       */
+      xhrSetup: (xhr, url) => {
+        if (/\.m3u8(\?|$)/.test(url)) xhr.setRequestHeader('Cache-Control', 'no-cache')
+      },
+    })
     hlsRef.current = hls
     hls.loadSource(sourceUrl)
     hls.attachMedia(video)
@@ -845,7 +857,8 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
   useEffect(() => {
     const indexUrl = new URL(PGS_INDEX_PATH, sourceUrl).href
     const controller = new AbortController()
-    fetch(indexUrl, { signal: controller.signal })
+    // 同 master：清单是固定路径，必须每次回源校验，否则覆盖上传后名称不更新
+    fetch(indexUrl, { signal: controller.signal, cache: 'no-cache' })
       .then((response) => (response.ok ? response.json() : null))
       .then((data) => dispatch(setPgsTracks(toPgsTrackOptions(data, indexUrl))))
       .catch(() => undefined)
