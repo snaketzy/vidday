@@ -89,3 +89,19 @@ export function resolveGenreId(labelZh: string, code = '') {
 
 /** 儿童观众可见的题材 */
 export const KIDS_GENRES = ['animation', 'family']
+
+/**
+ * 前台题材 id → 后端题材中文名（反向映射）。
+ * 一个 id 可能对应多个中文名（如 纪录 / 纪录片 → doc），计数接口需一并传入。
+ */
+const GENRE_LABELS_BY_ID: Record<string, string[]> = (() => {
+  const map: Record<string, string[]> = {}
+  for (const [label, id] of Object.entries(GENRE_LABEL_TO_ID)) {
+    ;(map[id] ??= []).push(label)
+  }
+  return map
+})()
+
+export function genreLabelsForId(id: string): string[] {
+  return GENRE_LABELS_BY_ID[id] ?? []
+}

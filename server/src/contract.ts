@@ -154,6 +154,12 @@ export interface PublicTitlesResponse {
   items: PublicCarouselCard[]
 }
 
+/** 全量目录按筛选条件统计的作品总数（仅「已上架」影片 + 剧集）。 */
+export interface PublicTitlesCountResponse {
+  schemaVersion: number
+  total: number
+}
+
 /** 观看进度条目：卡片摘要叠加进度字段。 */
 export interface PublicWatchProgress extends PublicCarouselCard {
   /** 剧集单集 id；影片为 null */

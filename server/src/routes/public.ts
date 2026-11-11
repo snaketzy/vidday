@@ -20,6 +20,7 @@ import {
   type PublicProxyConfigResponse,
   type PublicTitleCreditsResponse,
   type PublicTitleResponse,
+  type PublicTitlesCountResponse,
   type PublicTitlesResponse,
   type PublicWatchProgress,
 } from '../contract.ts'
@@ -27,6 +28,7 @@ import {
   DEFAULT_LATEST_DAYS,
   cardForTitleId,
   cardsForTitleIds,
+  countAllTitles,
   getCollectionDetail,
   getTitleCredits,
   getTitleDetail,
@@ -168,6 +170,34 @@ export const publicRoutes: FastifyPluginAsync = async (app) => {
 
     const { items, total } = await listLatest({ days, limit })
     const body: PublicLatestResponse = { schemaVersion: PUBLIC_SCHEMA_VERSION, days, total, items }
+    return body
+  })
+
+  /**
+   * 全量目录计数：与 `/titles` 同一数据源（仅「已上架」影片与剧集），
+   * 按前台筛选条件（`type` / `genres` / `kids`）在库内直接 COUNT，
+   * 供「浏览全部作品」页头显示与筛选一致的作品总数，替代前端按页累计。
+   */
+  app.get<{ Querystring: Record<string, unknown> }>('/titles/count', async (request) => {
+    let type: 'movie' | 'series' | undefined
+    if (request.query.type !== undefined) {
+      const raw = String(request.query.type)
+      if (raw !== 'movie' && raw !== 'series') {
+        throw badRequest(`type 取值非法：${raw}`)
+      }
+      type = raw
+    }
+
+    /** 题材以中文标签传入（与后台题材过滤器同源），多个标签为「或」。 */
+    const genres = String(request.query.genres ?? '')
+      .split(',')
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0)
+
+    const kids = request.query.kids === '1' || request.query.kids === 'true'
+
+    const total = await countAllTitles({ type, genres, kids })
+    const body: PublicTitlesCountResponse = { schemaVersion: PUBLIC_SCHEMA_VERSION, total }
     return body
   })
 

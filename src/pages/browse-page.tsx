@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { RotateCcw } from 'lucide-react'
 import { useSearchParams } from 'react-router'
 
@@ -11,11 +11,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { genreName } from '@/data/genres'
+import { genreLabelsForId, genreName } from '@/data/genres'
 import { useAllTitles } from '@/hooks/use-all-titles'
 import { useGenres } from '@/hooks/use-genres'
 import { useLatestTitles } from '@/hooks/use-latest-titles'
 import { filterTitles, isKidsTitle, type CatalogFilters, type SortBy } from '@/lib/catalog'
+import { fetchAllTitlesCount } from '@/lib/public-api'
 import { useAppSelector } from '@/store/hooks'
 import { selectKidsMode } from '@/store/slices/auth-slice'
 import { selectAllTitles } from '@/store/slices/catalog-slice'
@@ -110,12 +111,36 @@ export function BrowsePage() {
   /** 分批渲染：只渲染已拉取的批次，其余随滚动追加（`latestOnly` 数据量已受限，不切） */
   const visible = latestOnly ? results : results.slice(0, loaded)
 
-  /** 类型 / 题材 / 儿童模式会改变条数，需要全量才能给出准确数字，此时把剩余批次补齐 */
-  const countScoped = Boolean(typeParam || genreParam || kidsOnly)
+  /**
+   * 页头计数：带筛选时按当前条件向服务端查库计数（仅「已上架」影片 + 剧集），
+   * 不再用已加载条数累计，保证数字与筛选一致且不随滚动变化。
+   * 「最新上架」窗口内一次全量返回，直接用本地条数即可。
+   */
+  const filteredType = filters.type === 'all' ? undefined : filters.type
+  const countScoped = Boolean(filteredType || filters.genreId || kidsOnly)
+  const [serverCount, setServerCount] = useState<number | null>(null)
+
   useEffect(() => {
-    if (latestOnly || !countScoped || !hasMore) return
-    loadMore()
-  }, [latestOnly, countScoped, hasMore, loadMore])
+    if (latestOnly || !countScoped) {
+      setServerCount(null)
+      return
+    }
+    let alive = true
+    fetchAllTitlesCount({
+      type: filteredType,
+      genres: filters.genreId ? genreLabelsForId(filters.genreId) : undefined,
+      kids: kidsOnly || undefined,
+    })
+      .then((value) => {
+        if (alive) setServerCount(value)
+      })
+      .catch(() => {
+        if (alive) setServerCount(null)
+      })
+    return () => {
+      alive = false
+    }
+  }, [latestOnly, countScoped, filteredType, filters.genreId, kidsOnly])
 
   const update = (key: string, value: string | null) => {
     const next = new URLSearchParams(searchParams)
@@ -125,8 +150,8 @@ export function BrowsePage() {
   }
 
   const hasFilters = Boolean(genreParam || typeParam || sortParam || addedWithinParam)
-  /** 无筛选时用后端全库总数，避免随滚动增长的数字被误读成「只有这么多」 */
-  const shownCount = latestOnly || countScoped ? results.length : total
+  /** 无筛选取后端全库总数；有筛选取服务端查库计数；查库未回时先沿用全库总数 */
+  const shownCount = latestOnly ? results.length : (serverCount ?? total)
 
   return (
     <div className="min-h-[70vh] pb-12 pt-24 md:pt-28">

@@ -29,6 +29,9 @@ import { getPool } from './pool.ts'
 /** 题材字典分组标识。 */
 const GENRE_GROUP = 'genre'
 
+/** 儿童可见题材的中文标签（与前台 KIDS_GENRES = ['animation', 'family'] 对齐）。 */
+const KIDS_GENRE_LABELS = ['动画', '家庭']
+
 /** 详情页主演署名条数上限（前台只展示主要阵容）。 */
 const PUBLIC_CAST_LIMIT = 8
 
@@ -875,6 +878,62 @@ async function loadAllTitlesUncached(params: {
     if (card) items.push(card)
   }
   return { items, total }
+}
+
+/**
+ * 全量目录计数：与 `/titles` 同一数据源（仅「已上架」影片与剧集），
+ * 但按前台筛选条件（类型 / 题材 / 儿童）直接在库内 COUNT，
+ * 供「浏览全部作品」页头显示与筛选一致的作品总数，避免随分页累计。
+ */
+export async function countAllTitles(params: {
+  type?: 'movie' | 'series'
+  genres?: string[]
+  kids?: boolean
+} = {}): Promise<number> {
+  const genres = params.genres ?? []
+  return cached(
+    `titles:count:${params.type ?? 'all'}:${genres.join('|')}:${params.kids ? 'kids' : '-'}`,
+    CATALOG_TTL_MS,
+    () => countAllTitlesUncached({ type: params.type, genres, kids: params.kids })
+  )
+}
+
+/** 全量目录计数直查实现（不缓存）；缓存与缓存键由 countAllTitles 负责。 */
+async function countAllTitlesUncached(params: {
+  type?: 'movie' | 'series'
+  genres: string[]
+  kids?: boolean
+}): Promise<number> {
+  const countOne = async (
+    table: 'movies' | 'series',
+    attr: 'movie_attrs' | 'series_attrs',
+    idColumn: 'movie_id' | 'series_id'
+  ): Promise<number> => {
+    const where = [`t.status = 'published'`]
+    const values: unknown[] = []
+    /** 题材与儿童题材各自独立 EXISTS，与前台 filterTitles 的「同时满足」语义一致。 */
+    const addGenreExists = (labels: string[]) => {
+      where.push(
+        `EXISTS (SELECT 1 FROM \`${attr}\` a JOIN \`dict\` d ON d.id = a.dict_id
+           WHERE a.${idColumn} = t.id AND d.group_code = ? AND d.label_zh IN (${placeholders(labels.length)}))`
+      )
+      values.push(GENRE_GROUP, ...labels)
+    }
+    if (params.genres.length) addGenreExists(params.genres)
+    if (params.kids) addGenreExists(KIDS_GENRE_LABELS)
+
+    const [rows] = await getPool().query<RowDataPacket[]>(
+      `SELECT COUNT(*) AS total FROM \`${table}\` t WHERE ${where.join(' AND ')}`,
+      values
+    )
+    return intOr(rows[0]?.total)
+  }
+
+  const [movies, series] = await Promise.all([
+    params.type === 'series' ? 0 : countOne('movies', 'movie_attrs', 'movie_id'),
+    params.type === 'movie' ? 0 : countOne('series', 'series_attrs', 'series_id'),
+  ])
+  return movies + series
 }
 
 /** 最新上架直查实现（不缓存）；缓存与缓存键由 listLatest 负责。 */

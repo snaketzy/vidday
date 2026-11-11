@@ -680,6 +680,24 @@ export async function fetchAllTitles(
   }
 }
 
+/**
+ * 全量目录按筛选条件统计的作品总数（仅「已上架」影片 + 剧集）。
+ * `genres` 为后端题材中文名，多个为「或」；`kids` 限定儿童题材。
+ */
+export async function fetchAllTitlesCount(
+  params: { type?: 'movie' | 'series'; genres?: string[]; kids?: boolean } = {},
+  signal?: AbortSignal,
+): Promise<number> {
+  const search = new URLSearchParams()
+  if (params.type) search.set('type', params.type)
+  if (params.genres?.length) search.set('genres', params.genres.join(','))
+  if (params.kids) search.set('kids', '1')
+  const query = search.toString()
+
+  const body = unwrap(await getJson(`/public/titles/count${query ? `?${query}` : ''}`, signal))
+  return num(body.total) ?? 0
+}
+
 /* ------------------------------------------------------------------ *
  * 用户侧数据：观看进度 / 我的片单（以 `X-Device-Id` 归属，可写）
  * ------------------------------------------------------------------ */
