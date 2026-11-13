@@ -5,7 +5,6 @@ import { Link, useParams } from 'react-router'
 import { ArtImage } from '@/components/art-image'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { ClientDownloadCta } from '@/components/title/client-download-cta'
 import { CreditHighlights } from '@/components/title/credit-highlights'
 import { TitleCard } from '@/components/title/title-card'
 import { genreName, genreNames } from '@/data/genres'
@@ -32,9 +31,6 @@ export function TitleDetailPage() {
   const record = useAppSelector((state) => selectProgressForTitle(state, id ?? ''))
   const [season, setSeason] = useState('1')
   const { credits } = useTitleCredits(id)
-
-  /** Electron 桌面外壳注入 window.vidday；浏览器下不存在，据此区分 Web 端。 */
-  const isDesktop = typeof window !== 'undefined' && Boolean(window.vidday)
 
   const similar = useMemo(
     () => (title ? similarTitles(title, allTitles, 12) : []),
@@ -105,25 +101,19 @@ export function TitleDetailPage() {
               <p className="mt-4 max-w-2xl text-sm leading-relaxed text-white/85">{title.logline}</p>
 
               <div className="mt-6 flex flex-wrap items-center gap-3">
-                {isDesktop ? (
-                  <>
-                    <Button size="lg" className="bg-white text-black hover:bg-white/85" onClick={() => play(title)}>
-                      <Play className="size-5 fill-current" />
-                      {resumeEpisode ? '继续观看' : '播放'}
-                    </Button>
-                    <Button
-                      size="lg"
-                      variant="secondary"
-                      className="bg-white/25 text-white backdrop-blur hover:bg-white/35"
-                      onClick={() => dispatch(toggleTitle(title.id))}
-                    >
-                      {inList ? <Check className="size-5" /> : <Plus className="size-5" />}
-                      {inList ? '已加入片单' : '加入片单'}
-                    </Button>
-                  </>
-                ) : (
-                  <ClientDownloadCta />
-                )}
+                <Button size="lg" className="bg-white text-black hover:bg-white/85" onClick={() => play(title)}>
+                  <Play className="size-5 fill-current" />
+                  {resumeEpisode ? '继续观看' : '播放'}
+                </Button>
+                <Button
+                  size="lg"
+                  variant="secondary"
+                  className="bg-white/25 text-white backdrop-blur hover:bg-white/35"
+                  onClick={() => dispatch(toggleTitle(title.id))}
+                >
+                  {inList ? <Check className="size-5" /> : <Plus className="size-5" />}
+                  {inList ? '已加入片单' : '加入片单'}
+                </Button>
                 <Button
                   size="icon"
                   variant="outline"
@@ -133,10 +123,6 @@ export function TitleDetailPage() {
                   <ThumbsUp className="size-5" />
                 </Button>
               </div>
-
-              {isDesktop ? null : (
-                <p className="mt-3 text-xs text-white/50">本片需在客户端观看，请下载对应系统版本</p>
-              )}
 
               {resumeEpisode ? (
                 <p className="mt-4 text-xs text-white/55">

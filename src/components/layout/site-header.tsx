@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { cn } from 'cn'
-import { ChevronDown, LogOut, Menu, Search, Settings, Users, Wifi } from 'lucide-react'
+import { ChevronDown, LogOut, Menu, Search, Settings, Users } from 'lucide-react'
 import { Link, NavLink, useLocation, useNavigate, useSearchParams } from 'react-router'
 
 import { BrandLogo } from '@/components/brand-logo'
@@ -282,12 +282,6 @@ export function SiteHeader() {
                 <Link to="/account" className="cursor-pointer gap-2">
                   <Settings className="size-4" />
                   账户与设置
-                </Link>
-              </DropdownMenuItem>
-              <DropdownMenuItem asChild>
-                <Link to="/playback-lines" className="cursor-pointer gap-2">
-                  <Wifi className="size-4" />
-                  播放线路
                 </Link>
               </DropdownMenuItem>
               <DropdownMenuSeparator className="bg-white/10" />

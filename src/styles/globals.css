@@ -151,6 +151,12 @@
     text-rendering: optimizeLegibility;
   }
 
+  /* Tailwind v4 preflight 把按钮光标改成了 default；这里统一恢复可交互元素的指针手型 */
+  button:not(:disabled),
+  [role='button']:not([aria-disabled='true']) {
+    cursor: pointer;
+  }
+
   ::selection {
     background-color: var(--brand);
     color: #fff;
