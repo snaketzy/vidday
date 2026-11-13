@@ -102,6 +102,16 @@ const PGS_INDEX_PATH = 'pgs-subs/index.json'
 const PGS_KEY_PREFIX = 'pgs:'
 
 /**
+ * 进度条悬停预览缩略图：与 master 同级放一份 `thumbnails/index.json`，
+ * 描述一组雪碧图（sprite）的规格。hls.js 不认标准 trickplay 标签
+ * （EXT-X-IMAGE-STREAM-INF / EXT-X-TILES），因此走自定义索引 + 自绘。
+ * 该资源缺失属正常情况（存量片没重编），悬停退化为纯时间提示。
+ */
+const THUMBNAIL_INDEX_PATH = 'thumbnails/index.json'
+/** 取不到缩略图时，悬停时间气泡的半宽（px），仅用于贴边夹取定位 */
+const HOVER_CHIP_HALF_WIDTH = 20
+
+/**
  * 断流退避重试参数。
  * hls.js 只在内部重试到耗尽，之后必须由调用方重新 loadSource / startLoad 才会再拉一次；
  * manifest 阶段（levels 为空）调用 startLoad() 是空操作，只能重新 loadSource。
@@ -398,6 +408,42 @@ function toPgsTrackOptions(data: unknown, indexUrl: string): MediaTrackOption[] 
   })
 }
 
+/**
+ * `thumbnails/index.json` 的结构：一组规格相同的雪碧图。
+ * count 是总格数，第 i 格落在第 floor(i / (columns*rows)) 张图的第 i % (columns*rows) 格（行优先）。
+ */
+interface ThumbnailIndex {
+  width: number
+  height: number
+  columns: number
+  rows: number
+  count: number
+  duration: number
+  files: string[]
+  /** 索引文件自身地址：每张雪碧图按相对路径解析到它所在目录 */
+  indexUrl: string
+}
+
+const positiveNumber = (value: unknown): number | null =>
+  typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null
+
+/** 把索引转成可用结构；字段不合法或没有图就返回 null，调用方据此退化 */
+function toThumbnailIndex(data: unknown, indexUrl: string): ThumbnailIndex | null {
+  if (typeof data !== 'object' || data === null) return null
+  const raw = data as Record<string, unknown>
+  const width = positiveNumber(raw.width)
+  const height = positiveNumber(raw.height)
+  const columns = positiveNumber(raw.columns)
+  const rows = positiveNumber(raw.rows)
+  const count = positiveNumber(raw.count)
+  const duration = positiveNumber(raw.duration)
+  if (!width || !height || !columns || !rows || !count || !duration) return null
+  if (!Array.isArray(raw.files)) return null
+  const files = raw.files.filter((file): file is string => typeof file === 'string' && file.length > 0)
+  if (files.length === 0) return null
+  return { width, height, columns, rows, count, duration, files, indexUrl }
+}
+
 /** 原生 HLS 的音轨接口（仅 Safari 实现），用于降级路径 */
 interface NativeAudioTrack {
   enabled: boolean
@@ -559,6 +605,14 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
   /** 快进 / 快退状态层：按左右键时短暂显示目标时间 */
   const [seekOsd, setSeekOsd] = useState<{ forward: boolean; target: number } | null>(null)
   const seekOsdTimer = useRef<number | undefined>(undefined)
+  /**
+   * 进度条悬停定位：null 表示未悬停，否则记录鼠标在轨道内的比例（0-1）、
+   * 对应时间，以及轨道宽度（用于把预览浮层夹在轨道内，不溢出左右时间标签）。
+   */
+  const [seekHover, setSeekHover] = useState<{ ratio: number; time: number; barWidth: number } | null>(null)
+  const seekBarRef = useRef<HTMLDivElement>(null)
+  /** 悬停预览缩略图索引；片子没生成 thumbnails/ 时为 null，浮层退化只显示时间 */
+  const [thumbIndex, setThumbIndex] = useState<ThumbnailIndex | null>(null)
   /** 当前是否由键盘驱动：为真时键盘操作不主动唤出控制栏，鼠标一动即恢复指针驱动 */
   const keyboardDrivenRef = useRef(false)
   const setContainerRef = useCallback((element: HTMLDivElement | null) => {
@@ -866,6 +920,20 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
     // 依赖 sourceUrl：换片时组件同实例复用，必须按新片源重新拉取清单，
     // 否则会残留上一部的 PGS 轨并误渲染到新片画面上。
   }, [dispatch, sourceUrl])
+
+  /* 悬停预览缩略图：约定与 master 同级，存量片没有这份索引，缺失即退化 */
+  useEffect(() => {
+    // 换片先清空，避免同一个组件实例把上一部的雪碧图用到新片上
+    setThumbIndex(null)
+    const indexUrl = new URL(THUMBNAIL_INDEX_PATH, sourceUrl).href
+    const controller = new AbortController()
+    // 同 master：固定路径的覆盖式上传，必须每次回源校验，否则重传后索引不更新
+    fetch(indexUrl, { signal: controller.signal, cache: 'no-cache' })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((data) => setThumbIndex(toThumbnailIndex(data, indexUrl)))
+      .catch(() => undefined)
+    return () => controller.abort()
+  }, [sourceUrl])
 
   /* 音轨 / 字幕选择下发到播放内核 */
   useEffect(() => {
@@ -1337,6 +1405,52 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
     seekOsdTimer.current = window.setTimeout(() => setSeekOsd(null), SEEK_OSD_TIMEOUT)
   }, [])
 
+  /** 悬停进度条：按鼠标 X 位置换算目标时间，供悬浮预览层展示 */
+  const handleSeekHover = (event: MouseEvent<HTMLDivElement>) => {
+    const element = seekBarRef.current
+    const duration = player.duration
+    if (!element || !duration) return
+    const rect = element.getBoundingClientRect()
+    if (!rect.width) return
+    const ratio = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width))
+    setSeekHover({ ratio, time: ratio * duration, barWidth: rect.width })
+  }
+
+  /**
+   * 悬停预览层的最终定位与雪碧图取格：
+   * 时间 → 第 i 格 → 第几张图的哪一行哪一列，全部由 index.json 的规格推导。
+   * 没有索引（老片源 / 请求失败）时只算定位，浮层退化成纯时间气泡。
+   */
+  const seekHoverLayer = useMemo(() => {
+    if (!seekHover) return null
+    const half = thumbIndex ? thumbIndex.width / 2 : HOVER_CHIP_HALF_WIDTH
+    // 贴边时把浮层夹在轨道内，否则会压到左右两侧的时间标签上
+    const left = seekHover.barWidth > half * 2
+      ? Math.min(seekHover.barWidth - half, Math.max(half, seekHover.ratio * seekHover.barWidth))
+      : seekHover.barWidth / 2
+
+    if (!thumbIndex) return { left, cell: null }
+
+    const { count, columns, rows, width, height, duration, files, indexUrl } = thumbIndex
+    // 时间归一化后乘总格数：索引里的 count 与 duration 同源，比按秒数取整更稳
+    const rawIndex = Math.floor((seekHover.time / duration) * count)
+    const index = Math.min(count - 1, Math.max(0, rawIndex))
+    const perSheet = columns * rows
+    const file = files[Math.min(files.length - 1, Math.floor(index / perSheet))]
+    if (!file) return { left, cell: null }
+    const cell = index % perSheet
+    return {
+      left,
+      cell: {
+        width,
+        height,
+        backgroundImage: `url(${new URL(file, indexUrl).href})`,
+        backgroundSize: `${columns * width}px ${rows * height}px`,
+        backgroundPosition: `-${(cell % columns) * width}px -${Math.floor(cell / columns) * height}px`,
+      },
+    }
+  }, [seekHover, thumbIndex])
+
   const wake = useCallback(() => {
     // 键盘驱动期间不主动显示控制栏，但仍维持自动隐藏计时，避免控件卡在屏上
     if (!keyboardDrivenRef.current) dispatch(setControlsVisible(true))
@@ -1345,7 +1459,6 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
       hideTimer.current = window.setTimeout(() => dispatch(setControlsVisible(false)), CONTROLS_TIMEOUT)
     }
   }, [dispatch])
-
   /** 指针交互：退出键盘驱动模式，恢复「一动鼠标即出控制栏」 */
   const wakeFromPointer = useCallback(() => {
     keyboardDrivenRef.current = false
@@ -1859,24 +1972,53 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
           <span className="w-14 shrink-0 text-right text-xs tabular-nums text-white/75">
             {formatTime(player.position)}
           </span>
-          <Slider
-            value={[player.position]}
-            buffered={buffered}
-            min={0}
-            max={player.duration || 1}
-            step={1}
-            aria-label="播放进度"
-            onValueChange={(value) => seekTo(value[0] ?? 0)}
-            /*
-             * 拖动进度条后滑块会持有焦点，此时 Radix Slider 会把方向键当作进度步进：
-             * 上下键会抢走播放器的音量快捷键，左右键还会与全局 ±10s 叠加成双重跳转。
-             * 拦掉默认行为，方向键统一交给播放器的全局快捷键处理。
-             */
-            onKeyDown={(event) => {
-              if (ARROW_KEYS.has(event.key)) event.preventDefault()
-            }}
-            className="[&_[data-slot=slider-buffered]]:bg-[#a31621] [&_[data-slot=slider-range]]:bg-brand [&_[data-slot=slider-thumb]]:size-3 [&_[data-slot=slider-thumb]]:border-0 [&_[data-slot=slider-thumb]]:bg-brand [&_[data-slot=slider-track]]:h-1 [&_[data-slot=slider-track]]:bg-white/20"
-          />
+          <div
+            ref={seekBarRef}
+            className="relative min-w-0 flex-1"
+            onMouseMove={handleSeekHover}
+            onMouseLeave={() => setSeekHover(null)}
+          >
+            <Slider
+              value={[player.position]}
+              buffered={buffered}
+              min={0}
+              max={player.duration || 1}
+              step={1}
+              aria-label="播放进度"
+              onValueChange={(value) => seekTo(value[0] ?? 0)}
+              /*
+               * 拖动进度条后滑块会持有焦点，此时 Radix Slider 会把方向键当作进度步进：
+               * 上下键会抢走播放器的音量快捷键，左右键还会与全局 ±10s 叠加成双重跳转。
+               * 拦掉默认行为，方向键统一交给播放器的全局快捷键处理。
+               */
+              onKeyDown={(event) => {
+                if (ARROW_KEYS.has(event.key)) event.preventDefault()
+              }}
+              /*
+               * 对齐奈飞 / YouTube 的悬停反馈：轨道由 4px 涨到 8px、滑块 12px 放大到 16px，
+               * 光标保持默认箭头，用尺寸变化 + 悬浮时间层表达「可拖到此处」。
+               * h-4 固定命中区高度，避免悬停放大时整条控制栏上下抖动。
+               */
+              className="h-4 [&_[data-slot=slider-buffered]]:bg-[#a31621] [&_[data-slot=slider-range]]:bg-brand [&_[data-slot=slider-thumb]]:size-3 [&_[data-slot=slider-thumb]]:border-0 [&_[data-slot=slider-thumb]]:bg-brand [&_[data-slot=slider-thumb]]:transition-all [&_[data-slot=slider-track]]:h-1 [&_[data-slot=slider-track]]:bg-white/20 [&_[data-slot=slider-track]]:transition-all hover:[&_[data-slot=slider-thumb]]:size-4 hover:[&_[data-slot=slider-track]]:h-2"
+            />
+            {seekHover && seekHoverLayer ? (
+              <div
+                className="pointer-events-none absolute bottom-full z-10 mb-2 flex -translate-x-1/2 flex-col items-center gap-1"
+                style={{ left: `${seekHoverLayer.left}px` }}
+              >
+                {seekHoverLayer.cell ? (
+                  /* 雪碧图按格定位：外层定死 size，背景用负偏移把目标格挪进视野 */
+                  <div
+                    className="rounded-sm bg-black bg-no-repeat"
+                    style={seekHoverLayer.cell}
+                  />
+                ) : null}
+                <span className="rounded bg-black/85 px-1.5 py-0.5 text-xs tabular-nums text-white">
+                  {formatTime(seekHover.time)}
+                </span>
+              </div>
+            ) : null}
+          </div>
           <span className="w-14 shrink-0 text-xs tabular-nums text-white/55">
             {formatTime(player.duration)}
           </span>
