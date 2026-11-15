@@ -22,7 +22,7 @@ import {
   VolumeX,
   X,
 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent } from 'react'
 import { cn } from 'cn'
 import { useNavigate } from 'react-router'
 
@@ -1472,6 +1472,11 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
     wake()
   }, [wake])
 
+  /** 焦点落在菜单触发器上时，方向键仍交给播放器全局快捷键，别让 Radix 抢去打开菜单。 */
+  const preventArrowTriggerOpen = useCallback((event: ReactKeyboardEvent<HTMLElement>) => {
+    if (ARROW_KEYS.has(event.key)) event.preventDefault()
+  }, [])
+
   useEffect(() => {
     wake()
     return () => {
@@ -2089,26 +2094,46 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
             <RotateCw className="size-5" />
           </Button>
 
-          <div className="group/volume flex items-center">
-            <Button
-              size="icon"
-              variant="ghost"
-              aria-label={player.muted ? '取消静音' : '静音'}
-              className={controlClass}
-              onClick={() => dispatch(toggleMute())}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                size="icon"
+                variant="ghost"
+                aria-label="音量"
+                className={controlClass}
+                onKeyDown={preventArrowTriggerOpen}
+              >
+                <VolumeIcon className="size-5" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent
+              align="center"
+              side="top"
+              className={cn(menuClass, 'w-44 p-2')}
+              portalContainer={menuPortalContainer}
             >
-              <VolumeIcon className="size-5" />
-            </Button>
-            <Slider
-              value={[player.muted ? 0 : Math.round(player.volume * 100)]}
-              min={0}
-              max={100}
-              step={1}
-              aria-label="音量"
-              onValueChange={(value) => dispatch(setVolume((value[0] ?? 0) / 100))}
-              className="pointer-events-none w-0 py-2 opacity-0 transition-all duration-200 group-hover/volume:pointer-events-auto group-hover/volume:w-24 group-hover/volume:opacity-100 [&_[data-slot=slider-range]]:bg-white [&_[data-slot=slider-thumb]]:size-3 [&_[data-slot=slider-thumb]]:border-0 [&_[data-slot=slider-thumb]]:bg-white [&_[data-slot=slider-track]]:h-1 [&_[data-slot=slider-track]]:bg-white/30"
-            />
-          </div>
+              <DropdownMenuItem className="cursor-pointer" onClick={() => dispatch(toggleMute())}>
+                <VolumeIcon className="size-4" />
+                {player.muted ? '取消静音' : '静音'}
+              </DropdownMenuItem>
+              <DropdownMenuSeparator className="bg-white/10" />
+              <div className="px-2 py-1.5">
+                <div className="mb-2 flex items-center justify-between text-[11px] text-white/55">
+                  <span>音量</span>
+                  <span>{`${player.muted ? 0 : Math.round(player.volume * 100)}%`}</span>
+                </div>
+                <Slider
+                  value={[player.muted ? 0 : Math.round(player.volume * 100)]}
+                  min={0}
+                  max={100}
+                  step={1}
+                  aria-label="音量"
+                  onValueChange={(value) => dispatch(setVolume((value[0] ?? 0) / 100))}
+                  className="[&_[data-slot=slider-range]]:bg-white [&_[data-slot=slider-thumb]]:size-3 [&_[data-slot=slider-thumb]]:border-0 [&_[data-slot=slider-thumb]]:bg-white [&_[data-slot=slider-track]]:h-1 [&_[data-slot=slider-track]]:bg-white/30"
+                />
+              </div>
+            </DropdownMenuContent>
+          </DropdownMenu>
 
           {title.seasons.length ? (
             <Button
@@ -2130,7 +2155,11 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
           <div className="ml-auto flex items-center gap-1">
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" className={cn(controlClass, 'gap-2 px-2 text-sm')}>
+                <Button
+                  variant="ghost"
+                  className={cn(controlClass, 'gap-2 px-2 text-sm')}
+                  onKeyDown={preventArrowTriggerOpen}
+                >
                   <Gauge className="size-5" />
                   <span className="hidden sm:inline">{player.rate}x</span>
                 </Button>
@@ -2160,6 +2189,7 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
                   variant="ghost"
                   aria-label="字幕"
                   className={cn(controlClass, 'gap-2 px-2 text-sm')}
+                  onKeyDown={preventArrowTriggerOpen}
                 >
                   <Captions className="size-5" />
                   {subtitleLabel ? <span className="hidden text-xs sm:inline">{subtitleLabel}</span> : null}
@@ -2208,6 +2238,7 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
                   variant="ghost"
                   aria-label="音轨"
                   className={cn(controlClass, 'gap-2 px-2 text-sm')}
+                  onKeyDown={preventArrowTriggerOpen}
                 >
                   <Languages className="size-5" />
                   {audioLabel ? <span className="hidden text-xs lg:inline">{audioLabel}</span> : null}
@@ -2240,7 +2271,12 @@ export function VideoPlayer({ title, episode }: VideoPlayerProps) {
 
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" aria-label="设置" className={cn(controlClass, 'px-2')}>
+                <Button
+                  variant="ghost"
+                  aria-label="设置"
+                  className={cn(controlClass, 'px-2')}
+                  onKeyDown={preventArrowTriggerOpen}
+                >
                   <Settings className="size-5" />
                 </Button>
               </DropdownMenuTrigger>
