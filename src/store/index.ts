@@ -22,7 +22,11 @@ type PersistedPlayer = Pick<
 >
 
 interface PersistedState {
-  auth?: { account: Account | null; activeProfileId: string | null }
+  auth?: {
+    account: Account | null
+    activeProfileId: string | null
+    profileAccessLockedUntil?: number | null
+  }
   myList?: { ids: string[] }
   watch?: { progress: NonNullable<ReturnType<typeof watchSlice.getInitialState>>['progress'] }
   player?: PersistedPlayer
@@ -50,6 +54,7 @@ function buildPreloadedState() {
         ? persisted.auth.activeProfileId
         : null,
     status: persisted.auth?.account ? 'authenticated' : 'idle',
+    profileAccessLockedUntil: persisted.auth?.profileAccessLockedUntil ?? null,
   }
 
   const playerBase = playerSlice.getInitialState()
@@ -97,7 +102,11 @@ store.subscribe(() => {
     saveTimer = undefined
     const state = store.getState()
     const payload: PersistedState = {
-      auth: { account: state.auth.account, activeProfileId: state.auth.activeProfileId },
+      auth: {
+        account: state.auth.account,
+        activeProfileId: state.auth.activeProfileId,
+        profileAccessLockedUntil: state.auth.profileAccessLockedUntil,
+      },
       myList: state.myList,
       watch: state.watch,
       player: {

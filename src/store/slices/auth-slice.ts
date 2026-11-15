@@ -10,6 +10,7 @@ export interface AuthState {
   activeProfileId: string | null
   status: AuthStatus
   error: string | null
+  profileAccessLockedUntil: number | null
 }
 
 const initialState: AuthState = {
@@ -17,6 +18,7 @@ const initialState: AuthState = {
   activeProfileId: null,
   status: 'idle',
   error: null,
+  profileAccessLockedUntil: null,
 }
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -45,9 +47,13 @@ const authSlice = createSlice({
       state.activeProfileId = null
       state.status = 'idle'
       state.error = null
+      state.profileAccessLockedUntil = null
     },
     clearError(state) {
       state.error = null
+    },
+    setProfileAccessLockedUntil(state, action: PayloadAction<number | null>) {
+      state.profileAccessLockedUntil = action.payload
     },
     selectProfile(state, action: PayloadAction<string>) {
       const exists = state.account?.profiles.some((profile) => profile.id === action.payload)
@@ -99,12 +105,14 @@ const authSlice = createSlice({
 })
 
 export const { logout, clearError, selectProfile, addProfile, renameProfile, removeProfile } = authSlice.actions
+export const { setProfileAccessLockedUntil } = authSlice.actions
 
 export const selectAccount = (state: { auth: AuthState }) => state.auth.account
 export const selectAuthStatus = (state: { auth: AuthState }) => state.auth.status
 export const selectAuthError = (state: { auth: AuthState }) => state.auth.error
 export const selectProfiles = (state: { auth: AuthState }) => state.auth.account?.profiles ?? []
 export const selectIsAuthenticated = (state: { auth: AuthState }) => Boolean(state.auth.account)
+export const selectProfileAccessLockedUntil = (state: { auth: AuthState }) => state.auth.profileAccessLockedUntil
 export const selectActiveProfile = (state: { auth: AuthState }) => {
   const { account, activeProfileId } = state.auth
   if (!account || !activeProfileId) return undefined

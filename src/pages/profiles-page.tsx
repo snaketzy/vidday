@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { cn } from 'cn'
 import { Pencil, Plus, Trash2 } from 'lucide-react'
 import { useNavigate } from 'react-router'
@@ -17,19 +17,63 @@ import {
 import { Input } from '@/components/ui/input'
 import { avatarArt } from '@/lib/art'
 import { useAppDispatch, useAppSelector } from '@/store/hooks'
-import { addProfile, removeProfile, renameProfile, selectProfile, selectProfiles } from '@/store/slices/auth-slice'
+import {
+  addProfile,
+  removeProfile,
+  renameProfile,
+  selectProfile,
+  selectProfileAccessLockedUntil,
+  selectProfiles,
+  setProfileAccessLockedUntil,
+} from '@/store/slices/auth-slice'
 import type { Profile } from '@/types'
 
 const MAX_PROFILES = 5
+const PROFILE_ACCESS_CODE = (import.meta.env.VITE_PROFILE_ACCESS_CODE ?? '2611').replace(/\D/g, '').slice(0, 4) || '2611'
+const PROFILE_ACCESS_COOLDOWN_MS = 60_000
 
 export function ProfilesPage() {
   const dispatch = useAppDispatch()
   const navigate = useNavigate()
   const profiles = useAppSelector(selectProfiles)
   const activeId = useAppSelector((state) => state.auth.activeProfileId)
+  const lockedUntil = useAppSelector(selectProfileAccessLockedUntil)
   const [editing, setEditing] = useState(false)
   const [renameTarget, setRenameTarget] = useState<Profile | null>(null)
   const [draft, setDraft] = useState('')
+  const [unlockTarget, setUnlockTarget] = useState<Profile | null>(null)
+  const [passcode, setPasscode] = useState('')
+  const [passcodeError, setPasscodeError] = useState<string | null>(null)
+  const [now, setNow] = useState(() => Date.now())
+
+  const remainingSeconds = useMemo(() => {
+    if (!lockedUntil) return 0
+    return Math.max(0, Math.ceil((lockedUntil - now) / 1000))
+  }, [lockedUntil, now])
+
+  const isLocked = remainingSeconds > 0
+
+  useEffect(() => {
+    if (!lockedUntil) return
+    if (lockedUntil <= Date.now()) {
+      dispatch(setProfileAccessLockedUntil(null))
+      return
+    }
+
+    setNow(Date.now())
+    const timer = window.setInterval(() => {
+      setNow(Date.now())
+    }, 250)
+
+    return () => window.clearInterval(timer)
+  }, [dispatch, lockedUntil])
+
+  useEffect(() => {
+    if (lockedUntil && lockedUntil <= now) {
+      dispatch(setProfileAccessLockedUntil(null))
+      setPasscodeError(null)
+    }
+  }, [dispatch, lockedUntil, now])
 
   const choose = (profile: Profile) => {
     if (editing) {
@@ -37,14 +81,33 @@ export function ProfilesPage() {
       setDraft(profile.name)
       return
     }
-    dispatch(selectProfile(profile.id))
-    navigate('/')
+    setUnlockTarget(profile)
+    setPasscode('')
+    if (!isLocked) setPasscodeError(null)
   }
 
   const saveRename = () => {
     if (!renameTarget) return
     dispatch(renameProfile({ id: renameTarget.id, name: draft }))
     setRenameTarget(null)
+  }
+
+  const submitPasscode = () => {
+    if (!unlockTarget || isLocked) return
+
+    if (passcode === PROFILE_ACCESS_CODE) {
+      dispatch(selectProfile(unlockTarget.id))
+      dispatch(setProfileAccessLockedUntil(null))
+      setPasscode('')
+      setPasscodeError(null)
+      setUnlockTarget(null)
+      navigate('/')
+      return
+    }
+
+    dispatch(setProfileAccessLockedUntil(Date.now() + PROFILE_ACCESS_COOLDOWN_MS))
+    setPasscode('')
+    setPasscodeError('密码错误，请在 60 秒后重试。')
   }
 
   return (
@@ -172,6 +235,67 @@ export function ProfilesPage() {
             </Button>
             <Button className="bg-brand text-white hover:bg-brand-hover" onClick={saveRename}>
               保存
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={Boolean(unlockTarget)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setUnlockTarget(null)
+            setPasscode('')
+            if (!isLocked) setPasscodeError(null)
+          }
+        }}
+      >
+        <DialogContent className="max-w-sm border-white/10 bg-[#181818] text-white">
+          <DialogHeader>
+            <DialogTitle>输入 4 位密码</DialogTitle>
+            <DialogDescription className="text-white/50">
+              选择 {unlockTarget?.name ?? '观众'} 后，需要输入密码才可进入。
+              {isLocked ? ` 当前已锁定，还需等待 ${remainingSeconds} 秒。` : ' 请输入已配置的 4 位密码。'}
+            </DialogDescription>
+          </DialogHeader>
+          <Input
+            autoFocus
+            inputMode="numeric"
+            placeholder="请输入 4 位密码"
+            value={passcode}
+            disabled={isLocked}
+            onChange={(event) => {
+              setPasscode(event.target.value.replace(/\D/g, '').slice(0, 4))
+              if (!isLocked && passcodeError) setPasscodeError(null)
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && passcode.length === 4 && !isLocked) submitPasscode()
+            }}
+            className="border-white/20 bg-black/40 text-center text-lg tracking-[0.4em] text-white"
+          />
+          <p className={cn('text-sm', isLocked ? 'text-amber-300' : 'text-white/50')}>
+            {isLocked
+              ? `已进入冷却，请在 ${remainingSeconds} 秒后再次输入。`
+              : passcodeError ?? '密码为 4 位数字。'}
+          </p>
+          <DialogFooter>
+            <Button
+              variant="ghost"
+              className="text-white/70 hover:bg-white/10 hover:text-white"
+              onClick={() => {
+                setUnlockTarget(null)
+                setPasscode('')
+                if (!isLocked) setPasscodeError(null)
+              }}
+            >
+              取消
+            </Button>
+            <Button
+              className="bg-brand text-white hover:bg-brand-hover disabled:bg-white/20 disabled:text-white/50"
+              disabled={passcode.length !== 4 || isLocked}
+              onClick={submitPasscode}
+            >
+              进入
             </Button>
           </DialogFooter>
         </DialogContent>
