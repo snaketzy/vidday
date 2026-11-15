@@ -252,10 +252,17 @@ const EDGE_COLO_LABELS: Record<string, string> = {
 /** 从响应头读取当前接入机房，cf-ray 形如 `a5033e168faa26d1-HKG` */
 function edgeColoFromResponse(networkDetails: NetworkDetailsLike): string | null {
   if (!networkDetails) return null
-  const ray =
-    networkDetails instanceof XMLHttpRequest
-      ? networkDetails.getResponseHeader('cf-ray')
-      : networkDetails.headers.get('cf-ray')
+  // cf-ray 是 Cloudflare 自动注入的头；CORS 未声明 expose 时浏览器会拒绝读取并抛错，
+  // 这里用 try-catch 兜底，失败时仅放弃机房展示，不影响播放链路。
+  let ray: string | null = null
+  try {
+    ray =
+      networkDetails instanceof XMLHttpRequest
+        ? networkDetails.getResponseHeader('cf-ray')
+        : networkDetails.headers.get('cf-ray')
+  } catch {
+    return null
+  }
   const colo = ray?.split('-').pop()?.trim().toUpperCase()
   return colo && /^[A-Z]{3}$/.test(colo) ? colo : null
 }
