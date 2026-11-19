@@ -34,7 +34,7 @@ nvm use
 
 npm install
 
-# 启动开发服务器（默认 http://localhost:5172）
+# 启动开发服务器（默认 http://localhost:5175）
 npm run dev
 ```
 
