@@ -13,6 +13,7 @@ import { timingSafeEqual } from 'node:crypto'
 import Fastify, { type FastifyInstance } from 'fastify'
 
 import { closePool, pingMysql } from './db/pool.ts'
+import { ensureQoeTables } from './db/qoe.ts'
 import { warmContentCache } from './db/queries.ts'
 import { env } from './env.ts'
 import { HttpError, unauthorized } from './http.ts'
@@ -42,7 +43,7 @@ function buildApp(): FastifyInstance {
   app.addHook('onRequest', async (request, reply) => {
     reply.header('access-control-allow-origin', corsOriginFor(request.headers.origin))
     reply.header('vary', 'origin')
-    reply.header('access-control-allow-methods', 'GET,PUT,DELETE,OPTIONS')
+    reply.header('access-control-allow-methods', 'GET,PUT,POST,DELETE,OPTIONS')
     reply.header('access-control-allow-headers', 'content-type,accept,x-app-key,x-device-id')
 
     if (request.method === 'OPTIONS') {
@@ -95,6 +96,9 @@ async function main(): Promise<void> {
 
   const db = await pingMysql()
   app.log.info(`MySQL 已连接：${db.database}（${db.version}）`)
+
+  // 幂等建表：保证独立部署时 QoE 上报链路可直接落库
+  await ensureQoeTables()
 
   await app.listen({ host: '0.0.0.0', port: env.port })
   app.log.info(`Vidday 后台服务已就绪：http://127.0.0.1:${env.port}`)

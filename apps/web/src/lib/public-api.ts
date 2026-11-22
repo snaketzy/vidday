@@ -386,7 +386,7 @@ const API_BASE_FALLBACKS = (import.meta.env.VITE_API_BASE_URL_FALLBACK ?? '')
 const APP_API_KEY = import.meta.env.VITE_APP_API_KEY ?? ''
 
 interface RequestOptions {
-  method?: 'GET' | 'PUT' | 'DELETE'
+  method?: 'GET' | 'PUT' | 'POST' | 'DELETE'
   body?: unknown
   signal?: AbortSignal
   /** 用户侧数据端点需携带 `X-Device-Id` 标识归属设备 */
@@ -735,4 +735,68 @@ export async function addToMyList(titleId: number): Promise<void> {
 /** 移出片单。 */
 export async function removeFromMyList(titleId: number): Promise<void> {
   await requestJson(`/public/list/${titleId}`, { method: 'DELETE', device: true })
+}
+
+/* ------------------------------------------------------------------ *
+ * QoE 体验监测上报（播放器埋点 → 服务端落库 → 管理后台聚合展示）
+ *
+ * 一次播放会话生成唯一 sessionId；周期性与结束时上报会话累计值 +
+ * 上次成功后的增量事件。上报是「尽力而为」，失败不回滚、不阻塞播放。
+ * ------------------------------------------------------------------ */
+
+/** 采集端类型。 */
+export type QoeClient = 'web' | 'android'
+
+/** 会话级聚合：客户端上报的均为累计值。 */
+export interface PublicQoeSessionUpsert {
+  /** 客户端生成的会话标识（满足 ^[A-Za-z0-9._-]{8,64}$） */
+  sessionId: string
+  client: QoeClient
+  titleId?: number | null
+  episodeId?: number | null
+  contentType?: string | null
+  titleName?: string | null
+  playUrl?: string | null
+  /** 起播耗时：点击播放 → 首帧（毫秒） */
+  ttffMs?: number | null
+  durationMs?: number
+  watchedMs?: number
+  rebufferCount?: number
+  rebufferMs?: number
+  avgBitrateKbps?: number | null
+  peakBitrateKbps?: number | null
+  switchCount?: number
+  errorCount?: number
+  droppedFrames?: number
+  totalFrames?: number
+  /** 会话开始时间（ISO） */
+  startedAt: string
+  /** 会话结束时间（ISO）；未结束为 null */
+  endedAt?: string | null
+}
+
+/** 原始事件明细：增量上报。 */
+export interface PublicQoeEventInput {
+  /** 事件类型：ttff / stall / level_switch / error / end 等 */
+  type: string
+  /** 事件发生时间（ISO） */
+  eventAt: string
+  positionMs?: number | null
+  valueMs?: number | null
+  valueNum?: number | null
+  severity?: 'info' | 'warn' | 'error' | null
+  message?: string | null
+  payload?: Record<string, unknown> | null
+}
+
+/** POST /api/public/qoe 请求体。 */
+export interface PublicQoeReport {
+  schemaVersion: number
+  session: PublicQoeSessionUpsert
+  events?: PublicQoeEventInput[]
+}
+
+/** 上报一次播放会话的聚合指标与增量事件（即发即忘，失败静默）。 */
+export async function reportQoe(input: PublicQoeReport): Promise<void> {
+  await requestJson('/public/qoe', { method: 'POST', device: true, body: input })
 }

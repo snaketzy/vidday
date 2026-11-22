@@ -33,7 +33,14 @@ class _DetailPageState extends State<DetailPage> {
     if (url == null || url.isEmpty) return;
     Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => PlayerPage(title: detail.displayTitle, url: url),
+        builder: (_) => PlayerPage(
+          api: widget.api,
+          title: detail.displayTitle,
+          url: url,
+          titleId: detail.id,
+          contentType: detail.contentType,
+          titleName: detail.displayTitle,
+        ),
       ),
     );
   }

@@ -3,7 +3,9 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../core/api_client.dart';
 import '../core/native_player.dart';
+import '../core/qoe.dart';
 import 'widgets.dart';
 
 /// 播放页。
@@ -12,10 +14,25 @@ import 'widgets.dart';
 /// 控制能力（音量 / 快进快退 / 字幕 / 音轨 / 画质 / 画中画）与 Web 端对齐，
 /// 底层由原生 media3 ExoPlayer 承载。
 class PlayerPage extends StatefulWidget {
-  const PlayerPage({super.key, required this.title, required this.url});
+  const PlayerPage({
+    super.key,
+    required this.api,
+    required this.title,
+    required this.url,
+    this.titleId,
+    this.episodeId,
+    this.contentType,
+    this.titleName,
+  });
 
+  final ApiClient api;
   final String title;
   final String url;
+  /// QoE 归属：影片 / 剧集 ID（缺省时后台仅按会话展示）
+  final int? titleId;
+  final int? episodeId;
+  final String? contentType;
+  final String? titleName;
 
   @override
   State<PlayerPage> createState() => _PlayerPageState();
@@ -26,6 +43,7 @@ class _PlayerPageState extends State<PlayerPage> {
   static const Duration _controlsTimeout = Duration(seconds: 4);
 
   late final NativePlayerController _controller;
+  late final QoeTracker _qoe;
 
   Timer? _hideTimer;
   bool _controlsVisible = true;
@@ -40,6 +58,16 @@ class _PlayerPageState extends State<PlayerPage> {
     super.initState();
     _controller = NativePlayerController()..start();
     _controller.snapshot.addListener(_onSnapshot);
+    _qoe = QoeTracker(
+      api: widget.api,
+      meta: QoeSessionMeta(
+        titleId: widget.titleId,
+        episodeId: widget.episodeId,
+        contentType: widget.contentType,
+        titleName: widget.titleName ?? widget.title,
+        playUrl: widget.url,
+      ),
+    )..start();
     _scheduleHide();
   }
 
@@ -47,6 +75,7 @@ class _PlayerPageState extends State<PlayerPage> {
   void dispose() {
     _hideTimer?.cancel();
     _controller.snapshot.removeListener(_onSnapshot);
+    unawaited(_qoe.dispose());
     unawaited(_controller.dispose());
     // 用户在全屏状态下退出时把系统 UI 还原
     SystemChrome.setPreferredOrientations(DeviceOrientation.values);
@@ -57,6 +86,7 @@ class _PlayerPageState extends State<PlayerPage> {
   void _onSnapshot() {
     if (!mounted) return;
     final snapshot = _controller.snapshot.value;
+    _qoe.onSnapshot(snapshot);
     if (snapshot.inPip != _lastInPip) {
       _lastInPip = snapshot.inPip;
       _hideTimer?.cancel();
@@ -329,6 +359,9 @@ class _PlayerPageState extends State<PlayerPage> {
             const Center(child: CircularProgressIndicator()),
           if (snapshot.isBuffering && snapshot.duration > Duration.zero)
             const Center(child: CircularProgressIndicator()),
+          // 外挂 PGS 可能要下上百 MB，指示器不跟控制条一起自动隐藏
+          if (snapshot.subtitleLoading != null)
+            _buildSubtitleLoading(snapshot.subtitleLoading!),
           if (_controlsVisible && !snapshot.inPip) _buildControls(snapshot),
         ],
       ),
@@ -355,6 +388,44 @@ class _PlayerPageState extends State<PlayerPage> {
               child: const Text('重试'),
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  /// 外挂字幕下载期间的提示：大轨（最大 137MB）可能等十几秒，必须有反馈。
+  Widget _buildSubtitleLoading(SubtitleLoading loading) {
+    final progress = loading.progress;
+    return Align(
+      alignment: Alignment.bottomCenter,
+      child: Padding(
+        padding: const EdgeInsets.only(bottom: 110),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          decoration: BoxDecoration(
+            color: const Color(0xCC000000),
+            borderRadius: BorderRadius.circular(18),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              const SizedBox(
+                width: 14,
+                height: 14,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: Colors.white70,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Text(
+                progress == null
+                    ? '${loading.label} 加载中…'
+                    : '${loading.label} 加载中… ${(progress * 100).round()}%',
+                style: const TextStyle(color: Colors.white, fontSize: 13),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -388,14 +459,14 @@ class _PlayerPageState extends State<PlayerPage> {
             _scheduleHide();
           },
         ),
-        const SizedBox(width: 28),
+        const SizedBox(width: 36),
         _centerButton(
           snapshot.isPlaying ? Icons.pause : Icons.play_arrow,
           snapshot.isPlaying ? '暂停' : '播放',
           _togglePlay,
           primary: true,
         ),
-        const SizedBox(width: 28),
+        const SizedBox(width: 36),
         _centerButton(
           Icons.forward_10,
           '前进 10 秒',
@@ -415,7 +486,7 @@ class _PlayerPageState extends State<PlayerPage> {
     VoidCallback onPressed, {
     bool primary = false,
   }) {
-    final double diameter = primary ? 64 : 52;
+    final double diameter = primary ? 80 : 66;
     return Tooltip(
       message: tooltip,
       child: Material(
@@ -428,7 +499,7 @@ class _PlayerPageState extends State<PlayerPage> {
             width: diameter,
             height: diameter,
             child: Center(
-              child: Icon(icon, color: Colors.white, size: primary ? 34 : 26),
+              child: Icon(icon, color: Colors.white, size: primary ? 42 : 33),
             ),
           ),
         ),
@@ -630,6 +701,8 @@ class _SeekBarState extends State<_SeekBar> {
           child: SizedBox(
             height: 28,
             child: Stack(
+              // 拖拽气泡悬于进度条上方，需允许越界绘制
+              clipBehavior: Clip.none,
               children: <Widget>[
                 Center(
                   child: Container(height: 4, color: const Color(0x33FFFFFF)),
@@ -647,11 +720,39 @@ class _SeekBarState extends State<_SeekBar> {
                     ),
                   ),
                 ),
+                if (draft != null)
+                  Positioned(
+                    bottom: 32,
+                    left: (fraction * width - _bubbleWidth / 2)
+                        .clamp(0.0, (width - _bubbleWidth).clamp(0.0, double.infinity)),
+                    child: _dragBubble(Duration(milliseconds: positionMs)),
+                  ),
               ],
             ),
           ),
         );
       },
+    );
+  }
+
+  /// 拖拽气泡宽度：固定值便于把气泡夹在进度条两端之内。
+  static const double _bubbleWidth = 68;
+
+  /// 拖拽中的时间气泡：贴thumb上方显示目标时间点。
+  Widget _dragBubble(Duration value) {
+    return Container(
+      width: _bubbleWidth,
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      decoration: BoxDecoration(
+        color: const Color(0xF2000000),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: const Color(0x33FFFFFF)),
+      ),
+      child: Text(
+        _formatTime(value),
+        textAlign: TextAlign.center,
+        style: const TextStyle(color: Colors.white, fontSize: 13),
+      ),
     );
   }
 

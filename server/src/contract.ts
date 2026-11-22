@@ -190,6 +190,77 @@ export interface PublicListResponse {
   items: PublicCarouselCard[]
 }
 
+/* ------------------------------------------------------------------ *
+ * QoE 体验监测上报（前台播放器 → 服务端 → 共享库，管理后台聚合展示）
+ *
+ * 采集端（Web hls.js / Android TV media3）生成一次播放会话的标识，
+ * 周期性与结束时上报：会话级聚合 + 增量原始事件。服务端按 session_id
+ * 幂等 upsert 会话（客户端给的是累计值，直接覆盖），事件增量追加落库。
+ * ------------------------------------------------------------------ */
+
+/** QoE 采集端类型。 */
+export type QoeClient = 'web' | 'android'
+
+/** 会话级聚合：一次播放会话一行，客户端上报的为累计值。 */
+export interface PublicQoeSessionUpsert {
+  /** 客户端生成的会话标识（满足 ^[A-Za-z0-9._-]{8,64}$） */
+  sessionId: string
+  client: QoeClient
+  titleId?: number | null
+  episodeId?: number | null
+  contentType?: string | null
+  /** 片名快照，便于后台直接展示 */
+  titleName?: string | null
+  playUrl?: string | null
+  /** 起播耗时：点击播放 → 首帧（毫秒） */
+  ttffMs?: number | null
+  durationMs?: number
+  watchedMs?: number
+  rebufferCount?: number
+  rebufferMs?: number
+  avgBitrateKbps?: number | null
+  peakBitrateKbps?: number | null
+  switchCount?: number
+  errorCount?: number
+  droppedFrames?: number
+  totalFrames?: number
+  /** 会话开始时间（ISO） */
+  startedAt: string
+  /** 会话结束时间（ISO）；未结束为 null */
+  endedAt?: string | null
+}
+
+/** 原始事件明细：增量上报，服务端按上报顺序追加。 */
+export interface PublicQoeEventInput {
+  /** 事件类型：ttff / stall / level_switch / error / end 等 */
+  type: string
+  /** 事件发生时间（ISO） */
+  eventAt: string
+  /** 事件发生时的播放位置（毫秒） */
+  positionMs?: number | null
+  /** 时长类数值（毫秒） */
+  valueMs?: number | null
+  /** 数值类（码率 kbps / 分辨率高度等） */
+  valueNum?: number | null
+  severity?: 'info' | 'warn' | 'error' | null
+  message?: string | null
+  payload?: Record<string, unknown> | null
+}
+
+/** POST /api/public/qoe 请求体。 */
+export interface PublicQoeReport {
+  schemaVersion: number
+  session: PublicQoeSessionUpsert
+  events?: PublicQoeEventInput[]
+}
+
+/** POST /api/public/qoe 响应体：accepted 为本批落库的事件条数。 */
+export interface PublicQoeReportResponse {
+  schemaVersion: number
+  ok: true
+  accepted: number
+}
+
 /** 影人基础资料。 */
 export interface PublicPerson {
   id: number

@@ -41,11 +41,11 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Slider } from '@/components/ui/slider'
 import { formatTime } from '@/lib/format'
+import { QoeTracker } from '@/lib/qoe'
 import { titleBackdrop } from '@/lib/title-art'
 import { reportProgress } from '@/lib/user-sync'
 import { useAppDispatch, useAppSelector } from '@/store/hooks'
 import {
-  DEFAULT_QUALITY,
   SUBTITLE_OFF,
   endSession,
   loadSession,
@@ -174,6 +174,12 @@ const createSessionCode = () =>
     .toString(36)
     .slice(2, 18)
     .toUpperCase()
+
+/** 前台 id 为字符串；QoE 上报需要正整数，非法值归 null。 */
+function toQoeId(value: string | undefined): number | null {
+  const id = Number(value)
+  return Number.isInteger(id) && id > 0 ? id : null
+}
 
 type VideoPlaybackQualityWithWebkit = HTMLVideoElement & {
   webkitDecodedFrameCount?: number
@@ -322,18 +328,10 @@ function toQualityLevels(
   return [...byHeight.values()].sort((a, b) => b.height - a.height)
 }
 
-/** 优先沿用已选档位；缺失时回退到默认档位，再缺失则取与默认档位最接近的轨道 */
+/** 优先沿用已选档位；切集后新片源不含该档（或本就选的自适应）时交还自适应，避免锁死在某一档 */
 function pickQuality(levels: QualityLevel[], preferred: Quality): Quality {
   if (preferred === 'auto') return 'auto'
-  if (levels.some((level) => level.key === preferred)) return preferred
-  if (levels.some((level) => level.key === DEFAULT_QUALITY)) return DEFAULT_QUALITY
-  const target = Number.parseInt(DEFAULT_QUALITY, 10) || 720
-  const nearest = levels.reduce<QualityLevel | null>(
-    (best, level) =>
-      !best || Math.abs(level.height - target) < Math.abs(best.height - target) ? level : best,
-    null,
-  )
-  return nearest ? nearest.key : 'auto'
+  return levels.some((level) => level.key === preferred) ? preferred : 'auto'
 }
 
 /** 播放内核轨道信息（hls.js 的 MediaPlaylist / 原生 textTracks 都能映射到该结构） */
@@ -586,6 +584,8 @@ export function VideoPlayer({ title, episode, dormant = false, closePipToken = 0
   const pipExitByUiRef = useRef(false)
   /** 进度上报函数：交给媒体事件（暂停 / 播完）回调，保证读到最新的节流闭包 */
   const reportProgressRef = useRef<() => void>(() => {})
+  /** QoE 体验监测采集器：一次播放一个会话，随换片 / 切换剧集重建 */
+  const qoeRef = useRef<QoeTracker | null>(null)
   const qualityRef = useRef(player.quality)
   const [episodesOpen, setEpisodesOpen] = useState(false)
   const [levels, setLevels] = useState<QualityLevel[]>([])
@@ -746,6 +746,40 @@ export function VideoPlayer({ title, episode, dormant = false, closePipToken = 0
     }
   }, [title.id, episode?.id])
 
+  /* QoE 体验监测：每次进入播放（换片 / 切换剧集）新建一个采集会话，
+     每秒采样播放器真实指标（掉帧 / 码率 / 时长），随卸载做收尾上报。 */
+  useEffect(() => {
+    const tracker = new QoeTracker({
+      meta: {
+        titleId: toQoeId(title.id),
+        episodeId: toQoeId(episode?.id),
+        contentType: title.type,
+        titleName: episode ? `${title.name} - ${episode.title}` : title.name,
+        playUrl: sourceUrl,
+      },
+      sample: () => {
+        const video = videoRef.current
+        if (!video) return {}
+        const frames = readPlaybackFrames(video)
+        const hls = hlsRef.current
+        const level = hls && hls.currentLevel >= 0 ? hls.levels[hls.currentLevel] : undefined
+        const bitrateKbps = level ? Math.round((level.averageBitrate ?? level.bitrate ?? 0) / 1000) : 0
+        return {
+          positionMs: Math.round(video.currentTime * 1000),
+          durationMs: Number.isFinite(video.duration) ? Math.round(video.duration * 1000) : undefined,
+          totalFrames: frames.total,
+          droppedFrames: frames.dropped,
+          bitrateKbps: bitrateKbps > 0 ? bitrateKbps : null,
+        }
+      },
+    })
+    qoeRef.current = tracker
+    return () => {
+      qoeRef.current = null
+      tracker.dispose()
+    }
+  }, [title.id, title.name, title.type, episode?.id, episode?.title, sourceUrl])
+
   /* 装载 HLS：读取轨道信息并生成画质选项 */
   useEffect(() => {
     const video = videoRef.current
@@ -757,11 +791,33 @@ export function VideoPlayer({ title, episode, dormant = false, closePipToken = 0
       return
     }
 
-    // 固定前向缓冲区间，避免自适应把整片一次性缓冲完导致缓冲进度看不出边界
+    /*
+     * 配置取向：弱网 / 抖动优先，尽量用缓冲和保守升档换「不卡顿」。
+     * - 前向缓冲实际上限 = min(max(8 × maxBufferSize / 当前档位码率, maxBufferLength), maxMaxBufferLength)，
+     *   把三个值一起抬高，让高码率档位也能攒到 60~120s，抖动时靠缓冲吃掉掉速。
+     * - 只保留近 90s 已播缓冲，长片不至于把内存吃满。
+     * - 升档要估算带宽的 55%（默认 70%）才放行，避免「刚升上去就掉回来」的来回切换。
+     * - 同档 / 降档选择也从估算带宽里留出余量（默认 0.95 太贴近估算值，一点抖动就缓冲见底）。
+     * - 分片失败重试更密更久，瞬时抖动不至于升级为致命错误。
+     */
     const hls = new Hls({
       enableWorker: true,
-      maxBufferLength: 30,
-      maxMaxBufferLength: 60,
+      maxBufferLength: 60,
+      maxMaxBufferLength: 120,
+      maxBufferSize: 120 * 1000 * 1000,
+      backBufferLength: 90,
+      testBandwidth: true,
+      startFragPrefetch: true,
+      abrBandWidthUpFactor: 0.55,
+      abrBandWidthFactor: 0.85,
+      fragLoadPolicy: {
+        default: {
+          maxTimeToFirstByteMs: 15_000,
+          maxLoadTimeMs: 120_000,
+          timeoutRetry: { maxNumRetry: 4, retryDelayMs: 0, maxRetryDelayMs: 3000, backoff: 'linear' },
+          errorRetry: { maxNumRetry: 10, retryDelayMs: 500, maxRetryDelayMs: 4000, backoff: 'linear' },
+        },
+      },
       /*
        * 清单必须每次回源校验：播放地址是固定路径，覆盖式重新上传后 CDN 会继续命中旧 m3u8
        * （缓存键忽略 query，加时间戳无效），导致分辨率档位、音轨名、内嵌字幕名不更新。
@@ -819,6 +875,12 @@ export function VideoPlayer({ title, episode, dormant = false, closePipToken = 0
     hls.on(Hls.Events.LEVEL_SWITCHED, (_event, data) => {
       const level = hls.levels[data.level]
       setLiveHeight(level ? level.height : null)
+      qoeRef.current?.noteLevel(
+        level
+          ? { height: level.height, bitrateKbps: (level.averageBitrate ?? level.bitrate ?? 0) / 1000 }
+          : {},
+        Math.round(video.currentTime * 1000),
+      )
     })
     hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, publishTracks)
     hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, publishTracks)
@@ -861,6 +923,7 @@ export function VideoPlayer({ title, episode, dormant = false, closePipToken = 0
     )
 
     hls.on(Hls.Events.ERROR, (_event, data) => {
+      qoeRef.current?.noteError(`${data.type} / ${data.details}`, Boolean(data.fatal))
       // 原本这里把 hls.js 的死因全吞了，出问题只能看到「黑屏」看不出为什么，开发期留痕
       if (import.meta.env.DEV) {
         console.error(
@@ -1280,14 +1343,26 @@ export function VideoPlayer({ title, episode, dormant = false, closePipToken = 0
     const onPlay = () => dispatch(setPlaying(true))
     const onPause = () => {
       dispatch(setPlaying(false))
+      qoeRef.current?.setPlaying(false)
       reportProgressRef.current()
     }
     const onEnded = () => {
       dispatch(markEnded())
+      qoeRef.current?.setPlaying(false)
       reportProgressRef.current()
     }
-    const onWaiting = () => dispatch(setBuffering(true))
-    const onPlaying = () => dispatch(setBuffering(false))
+    const onWaiting = () => {
+      dispatch(setBuffering(true))
+      qoeRef.current?.beginStall(Math.round(video.currentTime * 1000))
+      qoeRef.current?.setPlaying(false)
+    }
+    const onPlaying = () => {
+      dispatch(setBuffering(false))
+      // QoE：首帧出画面（起播耗时终点）+ 卡顿收尾 + 进入播放计时
+      qoeRef.current?.markFirstFrame()
+      qoeRef.current?.endStall(Math.round(video.currentTime * 1000))
+      qoeRef.current?.setPlaying(true)
+    }
     const onSeeked = () => dispatch(setBuffering(false))
     const onProgress = () => syncBuffered()
     const onEnterPip = () => dispatch(setPictureInPicture(true))

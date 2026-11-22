@@ -103,7 +103,7 @@ export function TitleDetailPage() {
               <div className="mt-6 flex flex-wrap items-center gap-3">
                 <Button size="lg" className="bg-white text-black hover:bg-white/85" onClick={() => play(title)}>
                   <Play className="size-5 fill-current" />
-                  {resumeEpisode ? '继续观看' : '播放'}
+                  {resumeEpisode ? '继续观看' : '移动网络观影'}
                 </Button>
                 <Button
                   size="lg"

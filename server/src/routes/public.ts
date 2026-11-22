@@ -18,6 +18,8 @@ import {
   type PublicProgressResponse,
   type PublicProgressUpsert,
   type PublicProxyConfigResponse,
+  type PublicQoeReport,
+  type PublicQoeReportResponse,
   type PublicTitleCreditsResponse,
   type PublicTitleResponse,
   type PublicTitlesCountResponse,
@@ -46,6 +48,7 @@ import {
   removeFromMyList,
   upsertProgress,
 } from '../db/user-data.ts'
+import { insertQoeEvents, upsertQoeSession } from '../db/qoe.ts'
 import { badRequest, notFound, requirePositiveInt, toIdParam } from '../http.ts'
 import { readAppConfig } from '../config.ts'
 
@@ -53,6 +56,10 @@ import { readAppConfig } from '../config.ts'
 const DEVICE_ID_HEADER = 'x-device-id'
 /** 设备标识允许的字符集与长度（兼容 UUID 与自定义 ID）。 */
 const DEVICE_ID_PATTERN = /^[A-Za-z0-9._-]{8,64}$/
+/** QoE 会话标识：与设备标识同字符集（客户端生成，一次播放唯一）。 */
+const SESSION_ID_PATTERN = /^[A-Za-z0-9._-]{8,64}$/
+/** 单批上报的事件条数上限，避免异常客户端一次塞入海量明细。 */
+const MAX_QOE_EVENTS = 100
 
 /** 「最新上架」窗口与条数上限。 */
 const MAX_LATEST_DAYS = 90
@@ -335,5 +342,43 @@ export const publicRoutes: FastifyPluginAsync = async (app) => {
     const deviceId = requireDeviceId(request.headers as Record<string, unknown>)
     await removeFromMyList(deviceId, toIdParam(request.params.titleId))
     return { ok: true }
+  })
+
+  /* ---------------------------------------------------------------- *
+   * QoE 体验监测上报：前台播放器 → 此处落库（共享库）→ 管理后台聚合展示。
+   * 客户端周期性与结束时上报：会话级累计值 + 上次成功后的增量事件。
+   * ---------------------------------------------------------------- */
+
+  /**
+   * 上报一次播放会话的聚合指标与增量事件。
+   * 会话按 sessionId 幂等 upsert；本批新增事件追加落库。
+   */
+  app.post<{ Body: PublicQoeReport }>('/qoe', async (request) => {
+    const deviceId = requireDeviceId(request.headers as Record<string, unknown>)
+    const body = request.body ?? ({} as PublicQoeReport)
+    const session = body.session
+
+    if (!session || typeof session !== 'object') throw badRequest('缺少 session 数据', 'INVALID_QOE_SESSION')
+    if (typeof session.sessionId !== 'string' || !SESSION_ID_PATTERN.test(session.sessionId)) {
+      throw badRequest('sessionId 缺失或非法', 'INVALID_SESSION_ID')
+    }
+    if (session.client !== 'web' && session.client !== 'android') {
+      throw badRequest(`client 取值非法：${String(session.client)}`, 'INVALID_QOE_CLIENT')
+    }
+    if (typeof session.startedAt !== 'string' || Number.isNaN(new Date(session.startedAt).getTime())) {
+      throw badRequest('startedAt 缺失或非法（应为 ISO 时间）', 'INVALID_QOE_STARTED_AT')
+    }
+
+    const events = Array.isArray(body.events) ? body.events.slice(0, MAX_QOE_EVENTS) : []
+
+    await upsertQoeSession(deviceId, session)
+    const accepted = await insertQoeEvents(deviceId, session, events)
+
+    const response: PublicQoeReportResponse = {
+      schemaVersion: PUBLIC_SCHEMA_VERSION,
+      ok: true,
+      accepted,
+    }
+    return response
   })
 }

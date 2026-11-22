@@ -7,8 +7,8 @@ export type SubtitleTrack = string
 /** 音轨取值：实际音轨的标识 */
 export type AudioTrack = string
 
-/** 默认画质档位 */
-export const DEFAULT_QUALITY: Quality = '720p'
+/** 默认画质档位：默认交给 HLS 自适应（ABR），随网络质量自动升降档 */
+export const DEFAULT_QUALITY: Quality = 'auto'
 
 /** 字幕关闭时的取值 */
 export const SUBTITLE_OFF: SubtitleTrack = 'off'

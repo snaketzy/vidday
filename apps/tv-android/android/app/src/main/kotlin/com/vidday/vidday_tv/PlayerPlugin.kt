@@ -39,6 +39,8 @@ class PlayerPlugin(
     private var view: NativePlayerView? = null
 
     init {
+        // media3 内部日志默认全关（含字幕加载 / 解析失败），排查字幕问题时需要打开
+        androidx.media3.common.util.Log.setLogLevel(androidx.media3.common.util.Log.LOG_LEVEL_ALL)
         methodChannel.setMethodCallHandler(this)
         eventChannel.setStreamHandler(this)
     }

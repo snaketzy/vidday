@@ -4,12 +4,25 @@
   必须使用 texture_view：Flutter 的 AndroidView 走 Texture Layer Hybrid Composition，
   SurfaceView 属于独立窗口无法被合成，只有 TextureView 才能正常出画。
   控制条由 Flutter 侧绘制，因此关闭 PlayerView 自带控制器。
+  PGS 字幕由自定义覆盖层绘制（media3 无法解析标准 .sup，见 PgsSubtitleTrack）。
 -->
-<androidx.media3.ui.PlayerView xmlns:android="http://schemas.android.com/apk/res/android"
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
-    android:layout_height="match_parent"
-    app:resize_mode="fit"
-    app:show_buffering="never"
-    app:surface_type="texture_view"
-    app:use_controller="false" />
+    android:layout_height="match_parent">
+
+    <androidx.media3.ui.PlayerView
+        android:id="@+id/vidday_player"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        app:resize_mode="fit"
+        app:show_buffering="never"
+        app:surface_type="texture_view"
+        app:use_controller="false" />
+
+    <com.vidday.vidday_tv.PgsOverlayView
+        android:id="@+id/vidday_pgs_overlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+</FrameLayout>

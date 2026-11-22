@@ -38,6 +38,31 @@ class PlayerTrack {
   }
 }
 
+/// 外挂 PGS 字幕的加载状态。
+///
+/// 单份 `.sup` 最大见过 137MB，下载期间必须给用户反馈，否则会被当成「点了没反应」。
+class SubtitleLoading {
+  const SubtitleLoading({required this.label, this.progress});
+
+  final String label;
+
+  /// 0~1；服务端未给出长度时为 null。
+  final double? progress;
+
+  static SubtitleLoading? tryParse(Object? raw) {
+    if (raw is! Map) return null;
+    final label = raw['label'];
+    if (label is! String || label.isEmpty) return null;
+    final progress = (raw['progress'] as num?)?.toDouble();
+    return SubtitleLoading(
+      label: label,
+      progress: progress == null || progress < 0
+          ? null
+          : progress.clamp(0.0, 1.0).toDouble(),
+    );
+  }
+}
+
 /// 原生播放器上报的一次状态快照。
 class PlayerSnapshot {
   const PlayerSnapshot({
@@ -59,6 +84,7 @@ class PlayerSnapshot {
     this.audioTracks = const <PlayerTrack>[],
     this.videoTracks = const <PlayerTrack>[],
     this.textTracks = const <PlayerTrack>[],
+    this.subtitleLoading,
   });
 
   final Duration position;
@@ -81,6 +107,9 @@ class PlayerSnapshot {
   final List<PlayerTrack> audioTracks;
   final List<PlayerTrack> videoTracks;
   final List<PlayerTrack> textTracks;
+
+  /// 外挂字幕正在下载时的状态；null 表示没有在加载。
+  final SubtitleLoading? subtitleLoading;
 
   /// 尚未拿到视频尺寸时按 16:9 兜底，避免首帧画面高度为 0。
   double get aspectRatio {
@@ -115,6 +144,7 @@ class PlayerSnapshot {
       audioTracks: PlayerTrack.parseList(map['audioTracks']),
       videoTracks: PlayerTrack.parseList(map['videoTracks']),
       textTracks: PlayerTrack.parseList(map['textTracks']),
+      subtitleLoading: SubtitleLoading.tryParse(map['subtitleLoading']),
     );
   }
 

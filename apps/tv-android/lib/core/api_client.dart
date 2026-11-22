@@ -28,6 +28,8 @@ class ApiClient {
   final http.Client _client;
 
   static const Duration _timeout = Duration(seconds: 20);
+  /// 与后端 PUBLIC_SCHEMA_VERSION 保持一致。
+  static const int _schemaVersion = 2;
 
   Map<String, String> get _headers => <String, String>{
         'x-app-key': AppConfig.appKey,
@@ -81,6 +83,47 @@ class ApiClient {
       throw ApiException('详情数据格式异常');
     }
     return TitleDetail.fromJson(title);
+  }
+
+  /// 上报一次播放会话的 QoE 数据（尽力而为，失败由调用方静默处理）。
+  Future<void> reportQoe({
+    required Map<String, dynamic> session,
+    required List<Map<String, dynamic>> events,
+  }) async {
+    await _postJson('/public/qoe', <String, dynamic>{
+      'schemaVersion': _schemaVersion,
+      'session': session,
+      'events': events,
+    });
+  }
+
+  Future<void> _postJson(String path, Map<String, dynamic> body) async {
+    if (!AppConfig.isConfigured) {
+      throw ApiException('未注入 APP_API_KEY，请用 --dart-define 重新构建');
+    }
+
+    final uri = Uri.parse('${AppConfig.apiBaseUrl}$path');
+    late final http.Response response;
+    try {
+      response = await _client
+          .post(
+            uri,
+            headers: <String, String>{
+              ..._headers,
+              'content-type': 'application/json',
+            },
+            body: json.encode(body),
+          )
+          .timeout(_timeout);
+    } on TimeoutException {
+      throw ApiException('请求超时，请检查网络');
+    } catch (error) {
+      throw ApiException('网络不可用：$error');
+    }
+
+    if (response.statusCode != 200) {
+      throw ApiException(_describeError(response), statusCode: response.statusCode);
+    }
   }
 
   Future<Map<String, dynamic>> _getJson(
