@@ -11,6 +11,19 @@
 
 ## 目录结构
 
+本仓库为 monorepo，各端依赖彼此独立（各自 `node_modules` / 工具链），根目录不放统一的 `package.json`：
+
+```
+apps/
+├── web/          # React + Vite + Electron 前端（浏览器站点 + macOS 桌面壳）
+└── tv-android/   # Flutter 客户端（Android 手机 / Android TV）
+server/           # Fastify 后端（公开内容接口 + 设备归属数据）
+deploy/           # 部署脚本（Nginx / pm2 / 宝塔）
+docs/             # 文档
+```
+
+`apps/web/src/` 内部结构：
+
 ```
 src/
 ├── components/
@@ -32,6 +45,7 @@ src/
 # 安装依赖（推荐 Node 22）
 nvm use
 
+cd apps/web
 npm install
 
 # 启动开发服务器（默认 http://localhost:5175）
@@ -46,6 +60,8 @@ npm run dev
 ```
 
 ## 可用脚本
+
+> 以下命令均在 `apps/web/` 下执行。`apps/tv-android/` 与 `server/` 各自独立，见其目录内说明。
 
 | 命令                  | 说明                  |
 | ------------------- | ------------------- |

@@ -12,7 +12,7 @@
 #
 # 前置：
 #   - 仓库已 clone 到服务器
-#   - server/.env 与根 .env 已按各自 *.example 配置好（两端密钥必须一致）
+#   - server/.env 与 apps/web/.env 已按各自 *.example 配置好（两端密钥必须一致）
 #
 # 证书（Cloudflare Origin Certificate）：
 #   先放到 /etc/ssl/vidday/origin.pem 与 /etc/ssl/vidday/origin.key（chmod 600 origin.key）。
@@ -20,6 +20,8 @@
 set -euo pipefail
 
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Web 前端工程目录（monorepo：前端在 apps/web，后端在 server/）
+WEB_DIR="$APP_DIR/apps/web"
 WEB_ROOT="${WEB_ROOT:-/srv/vidday/web}"
 CERT_DIR="/etc/ssl/vidday"
 PM2_APP="vidday-api"
@@ -73,12 +75,12 @@ fi
 pm2 save
 
 # --- 4. 前端 --------------------------------------------------------
-[ -f "$APP_DIR/.env" ] || fail "缺少 $APP_DIR/.env，请先按 .env.example 配置（需 VITE_APP_API_KEY）"
+[ -f "$WEB_DIR/.env" ] || fail "缺少 $WEB_DIR/.env，请先按 apps/web/.env.example 配置（需 VITE_APP_API_KEY）"
 log "安装前端依赖并构建"
-(cd "$APP_DIR" && ELECTRON_SKIP_BINARY_DOWNLOAD=1 npm ci && npm run build)
+(cd "$WEB_DIR" && ELECTRON_SKIP_BINARY_DOWNLOAD=1 npm ci && npm run build)
 
 log "发布静态产物到 $WEB_ROOT"
-rsync -a --delete "$APP_DIR/dist/" "$WEB_ROOT/"
+rsync -a --delete "$WEB_DIR/dist/" "$WEB_ROOT/"
 
 # --- 5. 让 Nginx 生效（证书到位才 reload）---------------------------
 systemctl enable nginx >/dev/null 2>&1 || true

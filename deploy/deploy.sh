@@ -20,6 +20,8 @@
 set -euo pipefail
 
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Web 前端工程目录（monorepo：前端在 apps/web，后端在 server/）
+WEB_DIR="$APP_DIR/apps/web"
 BRANCH="${BRANCH:-$(git -C "$APP_DIR" rev-parse --abbrev-ref HEAD)}"
 PM2_APP="${PM2_APP:-vidday-api}"
 
@@ -45,10 +47,10 @@ else
 fi
 
 # --- 前置校验：构建期与运行期的密钥必须成对且一致，否则前端全量 401 ---
-[ -f "$APP_DIR/.env" ]        || fail "缺少 $APP_DIR/.env（构建期需 VITE_APP_API_KEY，参见 .env.example）"
+[ -f "$WEB_DIR/.env" ]        || fail "缺少 $WEB_DIR/.env（构建期需 VITE_APP_API_KEY，参见 apps/web/.env.example）"
 [ -f "$APP_DIR/server/.env" ] || fail "缺少 $APP_DIR/server/.env（参见 server/.env.example）"
 
-front_key="$(sed -n 's/^VITE_APP_API_KEY=\(.*\)$/\1/p' "$APP_DIR/.env" | head -n1)"
+front_key="$(sed -n 's/^VITE_APP_API_KEY=\(.*\)$/\1/p' "$WEB_DIR/.env" | head -n1)"
 back_key="$(sed -n 's/^APP_API_KEY=\(.*\)$/\1/p' "$APP_DIR/server/.env" | head -n1)"
 [ -n "$front_key" ] || fail ".env 中 VITE_APP_API_KEY 为空"
 [ -n "$back_key" ]  || fail "server/.env 中 APP_API_KEY 为空"
@@ -67,12 +69,12 @@ log "安装后端依赖"
 # --- 前端构建 ---
 # ELECTRON_SKIP_BINARY_DOWNLOAD：Web 部署用不到 Electron，省一次 ~100MB 下载
 log "安装前端依赖并构建"
-(cd "$APP_DIR" && ELECTRON_SKIP_BINARY_DOWNLOAD=1 npm ci && npm run build)
+(cd "$WEB_DIR" && ELECTRON_SKIP_BINARY_DOWNLOAD=1 npm ci && npm run build)
 
 # --- 发布静态产物 ---
 log "发布到 $WEB_ROOT"
 mkdir -p "$WEB_ROOT"
-rsync -a --delete "$APP_DIR/dist/" "$WEB_ROOT/"
+rsync -a --delete "$WEB_DIR/dist/" "$WEB_ROOT/"
 
 if [ -n "$WEB_USER" ]; then
   if [ "$(id -u)" -eq 0 ]; then

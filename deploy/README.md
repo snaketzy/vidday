@@ -46,7 +46,7 @@
    MYSQL_DATABASE=isee_videos_db
    ```
 
-   根 `.env` —— 参照 `.env.example`
+   `apps/web/.env` —— 参照 `apps/web/.env.example`
 
    ```ini
    VITE_API_BASE_URL=
@@ -54,8 +54,8 @@
    VITE_ENABLE_ADS=true
    ```
 
-   > `.env.example` 里没列 `VITE_APP_API_KEY`，但代码在读（`src/lib/public-api.ts`），必须补。
-   > 它是**构建期**变量，改了要重新 `npm run build`，重启后端无效。
+   > `apps/web/.env.example` 里没列 `VITE_APP_API_KEY`，但代码在读（`apps/web/src/lib/public-api.ts`），必须补。
+   > 它是**构建期**变量，改了要重新 `npm run build`（在 `apps/web/` 下），重启后端无效。
 
    `MYSQL_HOST` 用 `127.0.0.1`：MySQL 就在本机，走回环能省掉一大段公网 RTT。
 
@@ -197,7 +197,7 @@ curl -s https://<你的域名>/title/123 | grep -o '<title>.*</title>'   # 验�
 
 | 现象 | 原因与处理 |
 | --- | --- |
-| 接口全量 401 | 两端密钥不一致。对比根 `.env` 的 `VITE_APP_API_KEY` 与 `server/.env` 的 `APP_API_KEY`，改完重新 `npm run build`（构建期烘焙） |
+| 接口全量 401 | 两端密钥不一致。对比 `apps/web/.env` 的 `VITE_APP_API_KEY` 与 `server/.env` 的 `APP_API_KEY`，改完在 `apps/web/` 重新 `npm run build`（构建期烘焙） |
 | 子路由刷新 404 | Nginx 缺 `try_files $uri $uri/ /index.html` |
 | `/health` 报数据库错 | `MYSQL_*` 配置有误，或库未启动 |
 | 前端拿到旧数据 | 后端有进程内 TTL 缓存，重启后端或等待过期 |
@@ -209,4 +209,4 @@ curl -s https://<你的域名>/title/123 | grep -o '<title>.*</title>'   # 验�
 | 宝塔下接口 502 | 「Node项目」未启动，或端口不是 8791。检查面板项目状态与 `server/.env` 的 `PORT` |
 | 宝塔下 `pm2` 看不到后端进程 | 正常。「Node项目」用的是它自己的 pm2 实例，与本机全局 pm2 互不可见 |
 | 两套 Nginx 抢 80/443 | 装过宝塔后又跑了 `deploy/setup.sh`。卸载系统 Nginx：`apt remove --purge nginx nginx-common` |
-| 构建 OOM | 内存 < 2G 时本地 `npm run build` 后 scp `dist/` 上去 |
+| 构建 OOM | 内存 < 2G 时本地在 `apps/web/` 执行 `npm run build` 后 scp `apps/web/dist/` 上去 |
