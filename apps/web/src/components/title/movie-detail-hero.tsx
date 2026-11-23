@@ -69,6 +69,7 @@ export function MovieDetailHero({
   const maturity = title.maturity.trim()
   const hasMaturity = maturity !== '' && maturity !== '未分级'
   const isMovie = title.type === 'movie'
+  const { tmdb, imdb } = (isMovie ? title.ratings : undefined) ?? {}
   const isUhd = isMovie && title.isUhd === true
   const hasHevc = isMovie && title.hasHevc === true
   const audioTrackCount = isMovie && title.audioTrackCount != null && title.audioTrackCount >= 2 ? title.audioTrackCount : null
@@ -181,6 +182,24 @@ export function MovieDetailHero({
               <div className="max-w-[30rem]">
                 <Synopsis name={title.name} text={description} moviePreview className="text-foreground/95" />
               </div>
+            ) : null}
+            {tmdb !== undefined || imdb !== undefined ? (
+              <ul aria-label="平台评分" className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm font-semibold tabular-nums">
+                {tmdb !== undefined ? (
+                  <li className="inline-flex items-center gap-2">
+                    <span className="sr-only">TMDB (The Movie Database): </span>
+                    <span aria-hidden className="rounded-sm bg-teal-200 px-1.5 text-xs/5 font-bold tracking-wide text-teal-950">TMDB</span>
+                    {tmdb.toFixed(1)}
+                  </li>
+                ) : null}
+                {imdb !== undefined ? (
+                  <li className="inline-flex items-center gap-2">
+                    <span className="sr-only">IMDb (Internet Movie Database): </span>
+                    <span aria-hidden className="rounded-sm bg-amber-300 px-1.5 text-xs/5 font-black text-black">IMDb</span>
+                    {imdb.toFixed(1)}
+                  </li>
+                ) : null}
+              </ul>
             ) : null}
           </div>
         </div>

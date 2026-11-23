@@ -10,6 +10,7 @@
  * 以 `X-Device-Id` 标识设备（见 `@/lib/device-id`）。
  */
 import { getDeviceId } from '@/lib/device-id'
+import type { MovieRatings } from '@/types'
 
 /**
  * 与后端 `PUBLIC_SCHEMA_VERSION` 必须一致，不一致直接拒绝响应。
@@ -67,6 +68,7 @@ export interface PublicTitleDetail {
   year: number | null
   runtime: number | null
   rating: number | null
+  ratings?: MovieRatings
   maturity: string | null
   genres: string[]
   logline: string | null
@@ -261,6 +263,16 @@ function text(value: Json): string | null {
 
 function num(value: Json): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function normalizeMovieRatings(raw: Json): MovieRatings | undefined {
+  if (!isRecord(raw)) return undefined
+  const ratings: MovieRatings = {}
+  const tmdb = num(raw.tmdb)
+  const imdb = num(raw.imdb)
+  if (tmdb !== null && tmdb > 0 && tmdb <= 10) ratings.tmdb = tmdb
+  if (imdb !== null && imdb > 0 && imdb <= 10) ratings.imdb = imdb
+  return ratings.tmdb !== undefined || ratings.imdb !== undefined ? ratings : undefined
 }
 
 function bool(value: Json, fallback: boolean): boolean {
@@ -484,6 +496,7 @@ export async function fetchTitleDetail(
   const titleId = num(raw.id)
   const name = text(raw.title)
   if (titleId === null || !name) throw new PublicApiError('title 字段结构非法', 'contract')
+  const ratings = raw.contentType === 'movie' ? normalizeMovieRatings(raw.ratings) : undefined
 
   return {
     id: titleId,
@@ -495,6 +508,7 @@ export async function fetchTitleDetail(
     year: num(raw.year),
     runtime: num(raw.runtime),
     rating: num(raw.rating),
+    ...(ratings ? { ratings } : {}),
     maturity: text(raw.maturity),
     genres: textList(raw.genres),
     logline: text(raw.logline),
