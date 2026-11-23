@@ -75,7 +75,7 @@ export function MovieDetailHero({
   const hasMediaSpecs = isUhd || hasHevc || audioTrackCount !== null || subtitleTrackCount !== null
 
   return (
-    <section className="relative isolate w-full bg-background text-foreground">
+    <section className="relative isolate z-30 w-full bg-background text-foreground">
       {title.backdropUrl && failedBackdrop !== title.backdropUrl ? (
         <img
           src={title.backdropUrl}
