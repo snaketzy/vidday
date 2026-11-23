@@ -1,11 +1,14 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Check, ChevronRight, Clock, Play, Plus, Star, ThumbsUp } from 'lucide-react'
-import { Link, useParams } from 'react-router'
+import { Link, useLocation, useNavigate, useNavigationType, useParams } from 'react-router'
 
 import { ArtImage } from '@/components/art-image'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { CreditHighlights } from '@/components/title/credit-highlights'
+import { CreditRail } from '@/components/title/credit-rail'
+import { MovieDetailHero, MovieDetailProgress } from '@/components/title/movie-detail-hero'
+import { Synopsis } from '@/components/title/synopsis'
 import { TitleCard } from '@/components/title/title-card'
 import { genreName, genreNames } from '@/data/genres'
 import { usePlayTarget } from '@/hooks/use-play-target'
@@ -14,15 +17,249 @@ import { useTitleCredits } from '@/hooks/use-title-credits'
 import { pickCreditHighlights } from '@/lib/credits'
 import { episodeCount, formatRuntime } from '@/lib/format'
 import { similarTitles } from '@/lib/catalog'
+import { fetchTitleCredits, fetchTitleDetail, PublicApiError } from '@/lib/public-api'
+import { detailToTitle } from '@/lib/title-adapter'
 import { titleBackdrop, titlePoster } from '@/lib/title-art'
+import { reportProgress } from '@/lib/user-sync'
 import { useAppDispatch, useAppSelector } from '@/store/hooks'
 import { selectIsInMyList, toggleTitle } from '@/store/slices/my-list-slice'
-import { selectAllTitles } from '@/store/slices/catalog-slice'
-import { selectProgressForTitle } from '@/store/slices/watch-slice'
+import { selectAllTitles, selectTitleById, upsertTitles } from '@/store/slices/catalog-slice'
+import { recordProgress, removeProgress, selectProgressForTitle } from '@/store/slices/watch-slice'
 import { NotFoundPage } from '@/pages/not-found-page'
+import type { Title, WatchProgress } from '@/types'
+
+type DetailRequest<T> = { status: 'loading' | 'missing' | 'error' } | { status: 'success'; data: T }
+
+function useDetailRequest<T>(id: number, load: (id: number, signal: AbortSignal) => Promise<T>) {
+  const [request, setRequest] = useState<DetailRequest<T>>({ status: 'loading' })
+  const [attempt, setAttempt] = useState(0)
+
+  useEffect(() => {
+    const controller = new AbortController()
+    load(id, controller.signal).then(
+      (data) => {
+        if (!controller.signal.aborted) setRequest({ status: 'success', data })
+      },
+      (error: unknown) => {
+        if (controller.signal.aborted) return
+        setRequest({ status: error instanceof PublicApiError && error.status === 404 ? 'missing' : 'error' })
+      },
+    )
+    return () => controller.abort()
+  }, [attempt, id, load])
+
+  return {
+    request,
+    retry: () => {
+      setRequest({ status: 'loading' })
+      setAttempt((value) => value + 1)
+    },
+  }
+}
 
 export function TitleDetailPage() {
   const { id } = useParams()
+  const catalogTitle = useAppSelector((state) => selectTitleById(state, id))
+  const numericId = Number(id)
+
+  if (Number.isSafeInteger(numericId) && numericId > 0 && catalogTitle?.type !== 'series') {
+    return <RemoteTitleDetail key={id} id={numericId} />
+  }
+  if (catalogTitle?.type === 'movie') {
+    return <MovieDetail key={id} title={catalogTitle} rating={null} />
+  }
+  return <SeriesDetail key={id} id={id} />
+}
+
+function RemoteTitleDetail({ id }: { id: number }) {
+  // 片单或进度水合可先写入轻量卡片；电影详情仍需要完整简介与元数据。
+  const { request, retry } = useDetailRequest(id, fetchTitleDetail)
+  const dispatch = useAppDispatch()
+  const detail = request.status === 'success' ? request.data : null
+  const title = useMemo(() => (detail ? detailToTitle(detail) : null), [detail])
+
+  useEffect(() => {
+    if (title?.type === 'movie') dispatch(upsertTitles([title]))
+  }, [dispatch, title])
+
+  if (request.status === 'missing') return <NotFoundPage />
+  if (request.status === 'error') {
+    return (
+      <main className="min-h-[60vh] px-4 pt-28 md:px-12">
+        <p role="alert" className="mb-4">影片详情加载失败，请重试。</p>
+        <Button type="button" variant="secondary" onClick={retry}>重试</Button>
+      </main>
+    )
+  }
+  if (!title) return <div role="status" className="min-h-[70vh] animate-pulse bg-white/5"><span className="sr-only">正在加载详情</span></div>
+  if (title.type === 'series') return <SeriesDetail id={String(id)} />
+  const rating = detail?.rating ?? null
+  return <MovieDetail title={title} rating={rating !== null && rating > 0 && rating <= 10 ? rating : null} />
+}
+
+interface MovieReturn {
+  titleId: string
+  entryKey: string
+  scrollY: number
+  expiresAt: number
+}
+
+// 仅保留当前 SPA 会话内、由电影主按钮发起的最近一次往返。
+let movieReturn: MovieReturn | null = null
+
+function resumableMovieRecord(record: WatchProgress | undefined) {
+  return record && (record.episodeId ?? null) === null
+    && Number.isFinite(record.position) && Number.isFinite(record.duration)
+    && record.position >= 1 && record.position < record.duration
+    // The stored percent can be rounded differently from the media time ratio.
+    && record.percent < 98 && record.position / record.duration < 0.98
+    ? record
+    : undefined
+}
+
+function hasMovieSource(value: string | null | undefined) {
+  if (!value?.trim()) return false
+  try {
+    const protocol = new URL(value, window.location.href).protocol
+    return protocol === 'https:' || protocol === 'http:'
+  } catch {
+    return false
+  }
+}
+
+function MovieDetail({ title, rating }: { title: Title; rating: number | null }) {
+  const dispatch = useAppDispatch()
+  const play = usePlayTarget()
+  const navigate = useNavigate()
+  const location = useLocation()
+  const navigationType = useNavigationType()
+  const inList = useAppSelector((state) => selectIsInMyList(state, title.id))
+  const record = useAppSelector((state) => selectProgressForTitle(state, title.id))
+  const allTitles = useAppSelector(selectAllTitles)
+  const hasSource = hasMovieSource(title.playUrl)
+  const progress = hasSource ? resumableMovieRecord(record) : undefined
+  const watched = Boolean(record && (record.episodeId ?? null) === null && record.percent >= 98)
+  const watchedDuration = record && Number.isFinite(record.duration) && record.duration > 0
+    ? record.duration
+    : (title.runtime ?? 0) * 60
+  const canToggleWatched = watched || watchedDuration > 0
+  const playRef = useRef<HTMLButtonElement>(null)
+  const backRef = useRef<HTMLButtonElement>(null)
+  const launching = useRef(false)
+  const [returnTarget] = useState(() => {
+    if (movieReturn?.titleId !== title.id || movieReturn.expiresAt <= Date.now()) return null
+    if (navigationType === 'POP' && movieReturn.entryKey !== location.key) return null
+    return movieReturn
+  })
+  const similar = useMemo(() => similarTitles(title, allTitles, 12), [title, allTitles])
+  const { request: creditsRequest, retry: retryCredits } = useDetailRequest(Number(title.id), loadMovieCredits)
+  const credits = creditsRequest.status === 'success' ? creditsRequest.data : null
+  const entries = useMemo(() => (
+    credits ? [...credits.cast.slice(0, 12), ...credits.crew.slice(0, 8)] : []
+  ), [credits])
+
+  useEffect(() => {
+    if (!returnTarget || movieReturn !== returnTarget) return
+    // 在公共布局的滚动重置之后恢复，并让焦点不另外改变滚动位置。
+    const frame = requestAnimationFrame(() => {
+      movieReturn = null
+      window.scrollTo({ top: returnTarget.scrollY, behavior: 'instant' })
+      const trigger = playRef.current
+      const focusTarget = trigger && !trigger.disabled ? trigger : backRef.current
+      focusTarget?.focus({ preventScroll: true })
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [returnTarget])
+
+  function startPlayback() {
+    if (!hasSource || launching.current) return
+    launching.current = true
+    movieReturn = {
+      titleId: title.id,
+      entryKey: location.key,
+      scrollY: window.scrollY,
+      expiresAt: Date.now() + 6 * 60 * 60 * 1000,
+    }
+    // 播放页沿用目录解析；确保它读到本页已经验证过片源的版本。
+    dispatch(upsertTitles([title]))
+    play(title)
+  }
+
+  function toggleWatched() {
+    if (watched) {
+      // 中间件会同步删除服务端进度。
+      dispatch(removeProgress(title.id))
+      return
+    }
+    if (!(watchedDuration > 0)) return
+    const updatedAt = new Date().toISOString()
+    const entry: WatchProgress = {
+      titleId: title.id,
+      episodeId: undefined,
+      percent: 100,
+      position: watchedDuration,
+      duration: watchedDuration,
+      updatedAt,
+    }
+    dispatch(recordProgress(entry))
+    reportProgress({ titleId: title.id, episodeId: null, position: watchedDuration, duration: watchedDuration, percent: 100, updatedAt })
+  }
+
+  return (
+    <main className="min-w-0 pt-[68px] pb-12">
+      <MovieDetailHero
+        title={title}
+        rating={rating}
+        inList={inList}
+        watched={watched}
+        canToggleWatched={canToggleWatched}
+        hasSource={hasSource}
+        progress={progress}
+        canOpenCredits={entries.length > 0}
+        playRef={playRef}
+        backRef={backRef}
+        onBack={() => location.key === 'default' || (returnTarget && navigationType !== 'POP') ? navigate('/browse') : navigate(-1)}
+        onPlay={startPlayback}
+        onToggleList={() => dispatch(toggleTitle(title.id))}
+        onToggleWatched={toggleWatched}
+      />
+      {progress ? <MovieDetailProgress progress={progress} /> : null}
+      <section className="min-h-44 px-4 pt-5 sm:px-8 md:px-12" aria-labelledby="movie-credits-heading">
+        <div className="mb-4 flex items-baseline justify-between gap-4">
+          <h2 id="movie-credits-heading" className="text-lg font-semibold">演职人员</h2>
+          {entries.length ? (
+            <Link to={`/title/${title.id}/credits`} className="inline-flex items-center gap-1 rounded text-sm text-foreground/75 hover:text-foreground focus-visible:outline-2 focus-visible:outline-brand">
+              查看全部 <ChevronRight className="size-4" />
+            </Link>
+          ) : null}
+        </div>
+        {entries.length ? <CreditRail entries={entries} /> : (
+          <div className="text-sm text-foreground/75">
+            {title.director ? <p>导演：{title.director}</p> : null}
+            {title.cast.length ? <p>主演：{title.cast.join('、')}</p> : null}
+            {creditsRequest.status === 'loading' ? <p role="status">正在加载演职人员…</p> : null}
+            {creditsRequest.status === 'error' ? (
+              <div className="flex flex-wrap items-center gap-3">
+                <p role="alert">演职人员加载失败。</p>
+                <Button type="button" size="sm" variant="secondary" onClick={retryCredits}>重试</Button>
+              </div>
+            ) : null}
+            {(creditsRequest.status === 'missing' || creditsRequest.status === 'success') && !title.director && !title.cast.length ? (
+              <p>暂无演职人员资料。</p>
+            ) : null}
+          </div>
+        )}
+      </section>
+      <SimilarTitles items={similar} />
+    </main>
+  )
+}
+
+function loadMovieCredits(id: number, signal: AbortSignal) {
+  return Number.isSafeInteger(id) && id > 0 ? fetchTitleCredits(id, signal) : Promise.resolve(null)
+}
+
+function SeriesDetail({ id }: { id?: string }) {
   const dispatch = useAppDispatch()
   const play = usePlayTarget()
   const { title, status } = useResolvedTitle(id)
@@ -208,7 +445,7 @@ export function TitleDetailPage() {
           {/* 关于 */}
           <section className="mt-10">
             <h2 className="text-lg font-semibold text-white/90">关于《{title.name}》</h2>
-            <p className="mt-3 text-sm leading-relaxed text-white/75">{title.synopsis}</p>
+            <Synopsis name={title.name} text={title.synopsis} className="mt-3 text-white/75" />
             <dl className="mt-6 grid gap-4 text-sm sm:grid-cols-2">
               <div>
                 <dt className="text-white/45">导演</dt>
@@ -316,24 +553,27 @@ export function TitleDetailPage() {
         </aside>
       </div>
 
-      {similar.length ? (
-        <section className="mt-12">
-          <div className="mb-3 flex items-baseline gap-2 px-4 md:px-12">
-            <h2 className="text-base font-semibold text-white/90 md:text-lg">相似的影片与剧集</h2>
-            <Link
-              to="/browse"
-              className="ml-auto text-xs font-medium text-white/55 transition hover:text-white"
-            >
-              查看全部
-            </Link>
-          </div>
-          <div className="row-scrollbar flex gap-2 overflow-x-auto px-4 pb-3 md:px-12">
-            {similar.map((item) => (
-              <TitleCard key={item.id} title={item} />
-            ))}
-          </div>
-        </section>
-      ) : null}
+      <SimilarTitles items={similar} />
     </div>
+  )
+}
+
+function SimilarTitles({ items }: { items: Title[] }) {
+  if (!items.length) return null
+  return (
+    <section className="mt-12">
+      <div className="mb-3 flex items-baseline gap-2 px-4 md:px-12">
+        <h2 className="text-base font-semibold text-white/90 md:text-lg">相似的影片与剧集</h2>
+        <Link
+          to="/browse"
+          className="ml-auto text-xs font-medium text-white/55 transition hover:text-white"
+        >
+          查看全部
+        </Link>
+      </div>
+      <div className="row-scrollbar flex gap-2 overflow-x-auto px-4 pb-3 md:px-12">
+        {items.map((item) => <TitleCard key={item.id} title={item} />)}
+      </div>
+    </section>
   )
 }
