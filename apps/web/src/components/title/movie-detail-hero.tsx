@@ -60,13 +60,14 @@ export function MovieDetailHero({
   const sourceHintId = useId()
   const [failedBackdrop, setFailedBackdrop] = useState<string>()
   const description = title.synopsis.trim() || title.logline.trim()
-  const genres = [...new Set([...genreNames(title.genres), ...title.tags])].join(' · ')
+  const genres = [...new Set([...genreNames(title.genres), ...title.tags].map((genre) => genre.trim()).filter(Boolean))].join('，')
   const watchedTime = progress ? formatTime(progress.position) : ''
   const resumeTime = watchedTime.split(':').length === 2
     ? `00:${watchedTime.padStart(5, '0')}`
     : watchedTime.padStart(8, '0')
   const runtime = title.runtime && title.runtime > 0 ? formatRuntime(title.runtime) : null
-  const maturity = title.maturity !== '未分级' ? title.maturity : ''
+  const maturity = title.maturity.trim()
+  const hasMaturity = maturity !== '' && maturity !== '未分级'
 
   return (
     <section className="relative isolate w-full bg-background text-foreground">
@@ -152,13 +153,18 @@ export function MovieDetailHero({
           </div>
 
           <div className="flex min-w-0 flex-col justify-between">
-            {rating || runtime || title.year > 0 || maturity || genres ? (
-              <ul aria-label="影片信息" className="flex flex-wrap items-center gap-x-3 gap-y-2 text-sm text-foreground/80">
-                {rating ? <li className="flex items-center gap-1.5"><Star className="size-4 fill-current" aria-hidden /> <span className="sr-only">评分</span>{rating.toFixed(1)}</li> : null}
+            {rating || runtime || title.year > 0 || hasMaturity || genres ? (
+              <ul aria-label="影片信息" className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm font-semibold text-foreground/75 sm:gap-x-7">
+                {rating ? (
+                  <li className="flex items-center gap-1.5">
+                    <Star className="size-3.5 shrink-0 fill-current" aria-hidden />
+                    <span className="sr-only">评分</span>{rating.toFixed(1)}
+                  </li>
+                ) : null}
                 {runtime ? <li>{runtime}</li> : null}
                 {title.year > 0 ? <li>{title.year}</li> : null}
-                {maturity ? <li className="rounded border border-foreground/35 px-1.5 text-xs">{maturity}</li> : null}
-                {genres ? <li className="break-words">{genres}</li> : null}
+                {hasMaturity ? <li className="max-w-full rounded-sm border border-current/65 px-1.5 text-xs/4 wrap-anywhere">{maturity}</li> : null}
+                {genres ? <li className="max-w-full wrap-anywhere">{genres}</li> : null}
               </ul>
             ) : null}
             {description ? (
