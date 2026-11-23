@@ -635,6 +635,11 @@ async function movieDetail(movie: MovieRow): Promise<PublicTitleDetail> {
   const director = credits.find((credit) => credit.job === 'Director')
   const genres = await genresFor('movie_attrs', 'movie_id', id, genreMap)
   const [collectionResult] = collectionRows
+  const imdbRating = num(movie.rating_imdb)
+  const tmdbRating = num(movie.rating_tmdb)
+  const ratings: NonNullable<PublicTitleDetail['ratings']> = {}
+  if (tmdbRating !== null && tmdbRating > 0 && tmdbRating <= 10) ratings.tmdb = tmdbRating
+  if (imdbRating !== null && imdbRating > 0 && imdbRating <= 10) ratings.imdb = imdbRating
 
   return {
     id,
@@ -645,7 +650,8 @@ async function movieDetail(movie: MovieRow): Promise<PublicTitleDetail> {
     originalTitle: str(movie.original_title),
     year: num(movie.release_year),
     runtime: num(movie.runtime),
-    rating: num(movie.rating_imdb) ?? num(movie.rating_tmdb),
+    rating: imdbRating ?? tmdbRating,
+    ...(ratings.tmdb !== undefined || ratings.imdb !== undefined ? { ratings } : {}),
     maturity: str(movie.us_rating),
     genres,
     logline: str(movie.tagline),
