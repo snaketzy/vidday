@@ -104,15 +104,15 @@ export function MovieDetailHero({
         ) : null}
 
         {/* 左列（播放按钮 + 次级动作）与右列（元数据 + 简介）顶底对齐，播放按钮与下方图标行等宽。 */}
-        <div className="mt-5 grid items-stretch gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] lg:gap-14">
-          <div className="flex min-w-0 flex-col justify-between gap-3">
+        <div className="mt-5 grid items-stretch gap-6 [--hero-actions-width:17rem] lg:grid-cols-[var(--hero-actions-width)_minmax(0,1fr)] lg:gap-x-8">
+          <div className="flex min-w-0 max-w-[var(--hero-actions-width)] flex-col justify-between gap-3">
             <Button
               ref={playRef}
               type="button"
               size="lg"
               disabled={!hasSource}
               aria-describedby={hasSource ? undefined : sourceHintId}
-              className="h-12 w-[17rem] max-w-full bg-white text-black hover:bg-white/85 focus-visible:ring-brand"
+              className="h-12 w-full bg-white text-black hover:bg-white/85 focus-visible:ring-brand"
               onClick={onPlay}
             >
               <Play className="size-5 fill-current" />
