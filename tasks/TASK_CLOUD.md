@@ -9,6 +9,14 @@
 - **写入 / 禁区：** 新增 `server/test/cache.test.ts`；禁改 `server/src/`、包脚本和锁文件。
 - **输出 / 验收 / 交付：** `npm run typecheck` 与 `node --experimental-strip-types --test test/cache.test.ts` 通过，多次运行结果一致；附覆盖清单和现行行为说明。
 
+### SVC-02｜影片媒体规格可靠子集下发（CR-010）
+- **负责人 / 分支 / 模块：** 服务内容 Agent，`feature/backend`，SVC-CONTENT / 契约；对应 `WEB-02` 的消费端，二者文件不重叠。
+- **目标 / 功能：** 让影片详情接口下发媒体规格可靠子集：`isUhd`、`hasHevc`、`audioTrackCount`、`subtitleTrackCount`（来源列 `movies.is_uhd / has_hevc / audio_track_count / subtitle_track_count`）。仅影片；剧集不携带。
+- **输入 / 依赖 / 数据：** CR-010（[决策](decisions/DECISIONS.md)）；`server/src/db/queries.ts`、`server/src/contract.ts`；列存在性以 `moive-database-op/apps/api/src/db/schema.sql` 为准（只读参考）。基线 `70fe43e`。
+- **写入 / 禁区：** `server/src/db/queries.ts`、`server/src/contract.ts`。禁改 `SERIES_COLUMNS` / `seriesDetail`、禁改其他服务端文件、前端、数据库结构、`PUBLIC_SCHEMA_VERSION`（保持 2）。
+- **输出 / 验收 / 交付：** `server/` 运行 `npm run typecheck` 通过；`PublicTitleDetail` 新增字段为全可选（`?:`）；缺列或未扫描时按缺省/`null` 处理、不报错。交付变更文件清单、typecheck 结果与未验证项（列存在性未实测）。
+- **测试命令：** `cd server && npm run typecheck`
+
 ### DESK-01｜桌面降级验证手册
 - **负责人 / 分支 / 模块：** 桌面 Agent，`feature/desk-01`，DESKTOP。
 - **目标 / 功能：** 整理包内资源、缺 Mihomo、系统网络、订阅失败和恢复的可复验路径。

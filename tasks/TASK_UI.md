@@ -11,10 +11,10 @@
 
 ### WEB-02｜Web 影片详情页对齐 Infuse
 - **负责人 / 分支 / 模块：** Web UI Agent，`feature/web-ui`，WEB-UI；与 `WP-02` 文件独占范围不重叠。
-- **目标 / 功能：** 用全宽背景和底部渐变、宽屏左右分区及窄屏纵排组织详情；主按钮区分「播放」和「继续观看 00:13:59」；简介可展开；演职员横向排列，已看进度位于主视觉与演职员之间。
-- **输入 / 依赖 / 数据：** [UI / UX 规范](../docs/UI_UX_GUIDELINES.md) `DETAIL-01` 至 `DETAIL-07`；复用已有详情、演职员 API、片单、`usePlayTarget` 和 Redux 观看记录。继续观看按钮、只读进度条与播放器用同一条记录；无记录时不显示进度，无源时给出提示。有真实观看数据才显示观看区，不把推荐混入其中。
-- **写入 / 禁区：** `apps/web/src/pages/title-detail-page.tsx`；仅可另增 `apps/web/src/components/title/movie-detail-hero.tsx`。禁改播放层、共享路由、播放器状态、API、数据库、剧集契约和其他平台。
-- **验收 / 交付：** 在 `apps/web/` 运行 `npm run typecheck` 与 `npm run build`；用宽窄窗口分别检查有/无记录、无源、缺图、长简介、键盘操作，并保留截图。与 `WP-02` 合测从 `13:59` 续播，返回同一详情后时间与进度同步更新，焦点回到播放入口。
+- **目标 / 功能：** 用全宽背景和底部渐变、宽屏左右分区及窄屏纵排组织详情；主按钮区分「播放」和「继续观看 00:13:59」；简介可展开；演职员横向排列，已看进度位于主视觉与演职员之间。**CR-010：** 元数据行在评分 / 时长 / 年份 / 分级之后渲染媒体规格「可靠子集」徽章——`isUhd`→`4K`、`hasHevc`→`HEVC`、`audioTrackCount≥2`→`音轨 n`、`subtitleTrackCount≥1`→`字幕 n`；仅影片、字段缺失即不渲染。
+- **输入 / 依赖 / 数据：** [UI / UX 规范](../docs/UI_UX_GUIDELINES.md) `DETAIL-01` 至 `DETAIL-07`；CR-010（[决策](../decisions/DECISIONS.md)）；复用已有详情、演职员 API、片单、`usePlayTarget` 和 Redux 观看记录。继续观看按钮、只读进度条与播放器用同一条记录；无记录时不显示进度，无源时给出提示。有真实观看数据才显示观看区，不把推荐混入其中。
+- **写入 / 禁区：** `apps/web/src/pages/title-detail-page.tsx`、`apps/web/src/components/title/movie-detail-hero.tsx`、`apps/web/src/lib/public-api.ts`、`apps/web/src/lib/title-adapter.ts`、`apps/web/src/types/index.ts`。禁改播放层、共享路由、播放器状态、服务端、数据库、剧集契约和其他平台。
+- **验收 / 交付：** 在 `apps/web/` 运行 `npm run typecheck` 与 `npm run build`；用宽窄窗口分别检查有/无记录、无源、缺图、长简介、键盘操作，并保留截图；缺媒体规格字段时元数据行不出现徽章。与 `WP-02` 合测从 `13:59` 续播，返回同一详情后时间与进度同步更新，焦点回到播放入口。
 
 ### AU-01｜Android TV 遥控器选中与返回焦点
 - **负责人 / 分支 / 模块：** Android TV UI Agent，`feature/android-tv-ui`，AND-UI。
