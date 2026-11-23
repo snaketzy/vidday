@@ -215,7 +215,6 @@ function MovieDetail({ title, rating }: { title: Title; rating: number | null })
         canToggleWatched={canToggleWatched}
         hasSource={hasSource}
         progress={progress}
-        canOpenCredits={entries.length > 0}
         playRef={playRef}
         backRef={backRef}
         onBack={() => location.key === 'default' || (returnTarget && navigationType !== 'POP') ? navigate('/browse') : navigate(-1)}

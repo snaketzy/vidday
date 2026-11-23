@@ -1,7 +1,6 @@
 import { useId, useState } from 'react'
 import type { ReactNode, Ref } from 'react'
-import { ArrowLeft, Bookmark, CopyPlus, Ellipsis, Eye, EyeOff, Film, Play, Star } from 'lucide-react'
-import { Link } from 'react-router'
+import { ArrowLeft, Bookmark, CopyPlus, Eye, EyeOff, Film, Play, Star } from 'lucide-react'
 
 import { Synopsis } from '@/components/title/synopsis'
 import { Button } from '@/components/ui/button'
@@ -44,7 +43,6 @@ interface MovieDetailHeroProps {
   canToggleWatched: boolean
   hasSource: boolean
   progress?: WatchProgress
-  canOpenCredits: boolean
   playRef: Ref<HTMLButtonElement>
   backRef: Ref<HTMLButtonElement>
   onBack: () => void
@@ -54,7 +52,7 @@ interface MovieDetailHeroProps {
 }
 
 export function MovieDetailHero({
-  title, rating, inList, watched, canToggleWatched, hasSource, progress, canOpenCredits,
+  title, rating, inList, watched, canToggleWatched, hasSource, progress,
   playRef, backRef, onBack, onPlay, onToggleList, onToggleWatched,
 }: MovieDetailHeroProps) {
   const sourceHintId = useId()
@@ -94,13 +92,6 @@ export function MovieDetailHero({
           <ArrowLeft />
         </Button>
         <span className="min-w-0 flex-1 truncate text-sm font-semibold">{title.name}</span>
-        {canOpenCredits ? (
-          <Button asChild variant="ghost" size="icon" className="size-11">
-            <Link to={`/title/${title.id}/credits`} aria-label="更多：完整演职员表">
-              <Ellipsis />
-            </Link>
-          </Button>
-        ) : null}
       </div>
 
       <div className="px-4 pt-[clamp(9rem,37vw,27rem)] pb-6 sm:px-8 md:px-12 lg:pt-[clamp(18rem,42vh,29rem)]">
