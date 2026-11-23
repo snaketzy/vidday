@@ -119,7 +119,7 @@ export function detailToTitle(detail: PublicTitleDetail): Title {
   const { genres, tags } = splitGenres(detail.genres)
   const summary = detail.synopsis ?? ''
 
-  return baseFields({
+  const title = baseFields({
     id: detail.id,
     name,
     englishTitle: detail.englishTitle,
@@ -142,4 +142,8 @@ export function detailToTitle(detail: PublicTitleDetail): Title {
     audioTrackCount: detail.audioTrackCount ?? undefined,
     subtitleTrackCount: detail.subtitleTrackCount ?? undefined,
   })
+
+  return detail.contentType === 'movie' && detail.ratings
+    ? { ...title, ratings: detail.ratings }
+    : title
 }

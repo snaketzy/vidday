@@ -1,5 +1,10 @@
 export type ContentType = 'movie' | 'series'
 
+export interface MovieRatings {
+  tmdb?: number
+  imdb?: number
+}
+
 export interface Episode {
   id: string
   season: number
@@ -57,6 +62,8 @@ export interface Title {
   playUrl?: string | null
   /** 数据来源：mock = 本地演示数据，api = 后端真实库 */
   source?: 'mock' | 'api'
+  /** 仅电影详情提供的分平台评分 */
+  ratings?: MovieRatings
   /** 是否 UHD（4K），仅影片且后端有可靠数据时给出 */
   isUhd?: boolean
   /** 是否有 HEVC 封装 */
