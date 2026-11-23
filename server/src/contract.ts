@@ -63,6 +63,8 @@ export interface PublicTitleDetail {
   year: number | null
   runtime: number | null
   rating: number | null
+  /** 平台评分（仅影片详情下发；无有效评分时省略）。 */
+  ratings?: { tmdb?: number; imdb?: number }
   maturity: string | null
   genres: string[]
   logline: string | null
