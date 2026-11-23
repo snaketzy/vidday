@@ -32,6 +32,8 @@ Web 在 `VITE_API_BASE_URL` 后拼 `/api/public`，留空走同源；Android 的
 
 `PublicCarouselCard.id` 不总是作品 ID，导航/查询用 `targetType`、`targetId`；`playUrl`、图像及部分元数据可以为 null。合集 ID 与作品 ID 不混用。客户端容忍新增可选字段；现有字段删改、单位/状态码/归属语义变更须经审批并设兼容窗口。契约测试至少覆盖成功、空数组、null、错误壳、版本不兼容及旧客户端。
 
+电影详情按 CR-011 可选返回 `ratings: { tmdb?: number; imdb?: number }`，分数为 10 分制且大于 0。各来源缺失或无效时省略对应键；没有可用分数时省略 `ratings`。剧集不返回此字段，现有 `rating` 的优先级和语义不变。
+
 ## 平台内部契约
 
 - Flutter PlatformView `vidday/player`（`url,pgsIndexUrl,autoplay`）；同名 MethodChannel 含 `play,pause,retry,seekTo(position),seekBy(delta),setVolume(volume),setSpeed(speed),selectAudio(id),selectSubtitle(id),selectVideo(id),enterPip`；`vidday/player/events` 发快照，精确键以 [`native_player.dart`](../apps/tv-android/lib/core/native_player.dart) / [`NativePlayerView.kt`](../apps/tv-android/android/app/src/main/kotlin/com/vidday/vidday_tv/NativePlayerView.kt) 为准。进度毫秒、音量 0–1、原生轨道 `groupIndex:trackIndex`、外挂 `pgs:<file>`；字幕 null 关闭，画质 null/auto 恢复 ABR。
