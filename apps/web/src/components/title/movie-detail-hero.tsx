@@ -110,7 +110,7 @@ export function MovieDetailHero({
           <p className="mt-2 text-sm break-words text-foreground/75 sm:text-base">{title.originalName}</p>
         ) : null}
 
-        {/* 左列（播放按钮 + 次级动作）与右列（元数据 + 简介）顶底对齐，播放按钮与下方图标行等宽。 */}
+        {/* 右列从播放按钮顶缘开始排列，简介紧跟元数据。 */}
         <div className="mt-5 grid items-stretch gap-6 [--hero-actions-width:17rem] lg:grid-cols-[var(--hero-actions-width)_minmax(0,1fr)] lg:gap-x-8">
           <div className="flex min-w-0 max-w-[var(--hero-actions-width)] flex-col justify-between gap-3">
             <Button
@@ -158,7 +158,7 @@ export function MovieDetailHero({
             </TooltipProvider>
           </div>
 
-          <div className="flex min-w-0 flex-col justify-between">
+          <div className="flex min-w-0 flex-col gap-2.5">
             {rating || runtime || title.year > 0 || hasMaturity || hasMediaSpecs || genres ? (
               <ul aria-label="影片信息" className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm font-semibold text-foreground/75 sm:gap-x-7">
                 {rating ? (
@@ -178,7 +178,9 @@ export function MovieDetailHero({
               </ul>
             ) : null}
             {description ? (
-              <Synopsis name={title.name} text={description} className="mt-3 text-foreground/90" />
+              <div className="max-w-[30rem]">
+                <Synopsis name={title.name} text={description} moviePreview className="text-foreground/95" />
+              </div>
             ) : null}
           </div>
         </div>
