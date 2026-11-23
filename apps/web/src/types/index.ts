@@ -57,6 +57,14 @@ export interface Title {
   playUrl?: string | null
   /** 数据来源：mock = 本地演示数据，api = 后端真实库 */
   source?: 'mock' | 'api'
+  /** 是否 UHD（4K），仅影片且后端有可靠数据时给出 */
+  isUhd?: boolean
+  /** 是否有 HEVC 封装 */
+  hasHevc?: boolean
+  /** 音轨条数 */
+  audioTrackCount?: number
+  /** 字幕轨条数 */
+  subtitleTrackCount?: number
 }
 
 export interface Profile {

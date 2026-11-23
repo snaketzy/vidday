@@ -68,6 +68,12 @@ export function MovieDetailHero({
   const runtime = title.runtime && title.runtime > 0 ? formatRuntime(title.runtime) : null
   const maturity = title.maturity.trim()
   const hasMaturity = maturity !== '' && maturity !== '未分级'
+  const isMovie = title.type === 'movie'
+  const isUhd = isMovie && title.isUhd === true
+  const hasHevc = isMovie && title.hasHevc === true
+  const audioTrackCount = isMovie && title.audioTrackCount != null && title.audioTrackCount >= 2 ? title.audioTrackCount : null
+  const subtitleTrackCount = isMovie && title.subtitleTrackCount != null && title.subtitleTrackCount >= 1 ? title.subtitleTrackCount : null
+  const hasMediaSpecs = isUhd || hasHevc || audioTrackCount !== null || subtitleTrackCount !== null
 
   return (
     <section className="relative isolate w-full bg-background text-foreground">
@@ -153,7 +159,7 @@ export function MovieDetailHero({
           </div>
 
           <div className="flex min-w-0 flex-col justify-between">
-            {rating || runtime || title.year > 0 || hasMaturity || genres ? (
+            {rating || runtime || title.year > 0 || hasMaturity || hasMediaSpecs || genres ? (
               <ul aria-label="影片信息" className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm font-semibold text-foreground/75 sm:gap-x-7">
                 {rating ? (
                   <li className="flex items-center gap-1.5">
@@ -164,6 +170,10 @@ export function MovieDetailHero({
                 {runtime ? <li>{runtime}</li> : null}
                 {title.year > 0 ? <li>{title.year}</li> : null}
                 {hasMaturity ? <li className="max-w-full rounded-sm border border-current/65 px-1.5 text-xs/4 wrap-anywhere">{maturity}</li> : null}
+                {isUhd ? <li className="max-w-full rounded-sm border border-current/65 px-1.5 text-xs/4">4K</li> : null}
+                {hasHevc ? <li className="max-w-full rounded-sm border border-current/65 px-1.5 text-xs/4">HEVC</li> : null}
+                {audioTrackCount !== null ? <li className="max-w-full rounded-sm border border-current/65 px-1.5 text-xs/4">音轨 {audioTrackCount}</li> : null}
+                {subtitleTrackCount !== null ? <li className="max-w-full rounded-sm border border-current/65 px-1.5 text-xs/4">字幕 {subtitleTrackCount}</li> : null}
                 {genres ? <li className="max-w-full wrap-anywhere">{genres}</li> : null}
               </ul>
             ) : null}
