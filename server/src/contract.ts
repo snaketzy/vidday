@@ -74,6 +74,14 @@ export interface PublicTitleDetail {
   playUrl: string | null
   collections: { id: number; name: string }[]
   updatedAt: string
+  /** 媒体规格（仅影片下发；可靠子集，缺失表示未知）。是否 UHD（4K）。 */
+  isUhd?: boolean | null
+  /** 是否有 HEVC 封装。 */
+  hasHevc?: boolean | null
+  /** 音轨条数。 */
+  audioTrackCount?: number | null
+  /** 字幕轨条数。 */
+  subtitleTrackCount?: number | null
 }
 
 export interface PublicTitleResponse {

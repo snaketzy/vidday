@@ -121,6 +121,10 @@ interface MovieRow extends RowDataPacket {
   status: string
   created_at: string | null
   updated_at: string | null
+  is_uhd: number | null
+  has_hevc: number | null
+  audio_track_count: number | null
+  subtitle_track_count: number | null
 }
 
 interface SeriesRow extends RowDataPacket {
@@ -171,7 +175,8 @@ interface CreditRow extends RowDataPacket {
 /** 影片 / 剧集的展示列（卡片、详情共用）。 */
 const MOVIE_COLUMNS = `id, imdb_id, tmdb_id, title, english_title, original_title, chinese_title,
   tagline, overview_en, overview_zh, release_year, runtime, us_rating,
-  poster_url, backdrop_url, play_url, rating_imdb, rating_tmdb, status, created_at, updated_at`
+  poster_url, backdrop_url, play_url, rating_imdb, rating_tmdb, status, created_at, updated_at,
+  is_uhd, has_hevc, audio_track_count, subtitle_track_count`
 
 const SERIES_COLUMNS = `id, imdb_id, tmdb_id, title, english_title, original_title, chinese_title,
   tagline, overview_en, overview_zh, release_year, runtime, us_rating,
@@ -656,6 +661,10 @@ async function movieDetail(movie: MovieRow): Promise<PublicTitleDetail> {
     playUrl: str(movie.play_url),
     collections: collectionResult.map((row) => ({ id: intOr(row.id), name: String(row.name) })),
     updatedAt: fromDbDateTime(movie.updated_at),
+    isUhd: Boolean(num(movie.is_uhd)),
+    hasHevc: Boolean(num(movie.has_hevc)),
+    audioTrackCount: num(movie.audio_track_count),
+    subtitleTrackCount: num(movie.subtitle_track_count),
   }
 }
 
