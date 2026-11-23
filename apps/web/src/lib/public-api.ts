@@ -78,6 +78,14 @@ export interface PublicTitleDetail {
   playUrl: string | null
   collections: { id: number; name: string }[]
   updatedAt: string
+  /** 是否 UHD（4K），仅影片且后端有可靠数据时给出 */
+  isUhd: boolean
+  /** 是否有 HEVC 封装 */
+  hasHevc: boolean
+  /** 音轨条数 */
+  audioTrackCount: number | null
+  /** 字幕轨条数 */
+  subtitleTrackCount: number | null
 }
 
 /** 单条演职员署名。 */
@@ -504,6 +512,10 @@ export async function fetchTitleDetail(
         })
       : [],
     updatedAt: text(raw.updatedAt) ?? '',
+    isUhd: bool(raw.isUhd, false),
+    hasHevc: bool(raw.hasHevc, false),
+    audioTrackCount: num(raw.audioTrackCount),
+    subtitleTrackCount: num(raw.subtitleTrackCount),
   }
 }
 

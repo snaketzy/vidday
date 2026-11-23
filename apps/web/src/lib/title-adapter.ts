@@ -49,6 +49,10 @@ function baseFields(params: {
   synopsis: string
   director: string
   cast: string[]
+  isUhd?: boolean
+  hasHevc?: boolean
+  audioTrackCount?: number
+  subtitleTrackCount?: number
 }): Title {
   return {
     id: String(params.id),
@@ -75,6 +79,10 @@ function baseFields(params: {
     posterUrl: params.posterUrl,
     playUrl: params.playUrl,
     source: 'api',
+    isUhd: params.isUhd,
+    hasHevc: params.hasHevc,
+    audioTrackCount: params.audioTrackCount,
+    subtitleTrackCount: params.subtitleTrackCount,
   }
 }
 
@@ -129,5 +137,9 @@ export function detailToTitle(detail: PublicTitleDetail): Title {
     synopsis: summary,
     director: detail.director ?? '',
     cast: detail.cast,
+    isUhd: detail.isUhd,
+    hasHevc: detail.hasHevc,
+    audioTrackCount: detail.audioTrackCount ?? undefined,
+    subtitleTrackCount: detail.subtitleTrackCount ?? undefined,
   })
 }
