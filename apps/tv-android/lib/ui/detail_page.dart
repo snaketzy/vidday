@@ -701,7 +701,7 @@ class _PortraitMovieHero extends StatelessWidget {
                       secondary,
                       textAlign: TextAlign.center,
                       style: _portraitInfoStyle.copyWith(
-                        fontSize: (36 * unit).clamp(22, 42),
+                        fontSize: (30 * unit).clamp(18, 35),
                         fontWeight: FontWeight.w700,
                         height: 1.04,
                         shadows: titleShadows,
@@ -1205,7 +1205,7 @@ class _TitleText extends StatelessWidget {
           const SizedBox(height: 4),
           Text(
             secondary,
-            style: large.copyWith(fontSize: 24, fontWeight: FontWeight.w600),
+            style: large.copyWith(fontSize: 20, fontWeight: FontWeight.w600),
           ),
         ],
       ],
