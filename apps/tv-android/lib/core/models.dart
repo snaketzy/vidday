@@ -411,3 +411,188 @@ double progressPercent(int position, int duration) {
   if (duration <= 0 || position <= 0) return 0;
   return (position / duration * 100).clamp(0, 100).toDouble();
 }
+
+/// 影人参演 / 参与制作的一部作品（对照 `PublicPersonCredit`）。
+class PersonCredit {
+  const PersonCredit({
+    required this.titleId,
+    required this.contentType,
+    required this.title,
+    this.chineseTitle,
+    this.englishTitle,
+    this.releaseYear,
+    this.posterUrl,
+    this.playUrl,
+    this.rating,
+    this.job = '',
+    this.department = '',
+    this.character,
+  });
+
+  final int titleId;
+
+  /// movie | series。
+  final String contentType;
+  final String title;
+  final String? chineseTitle;
+  final String? englishTitle;
+  final int? releaseYear;
+  final String? posterUrl;
+  final String? playUrl;
+  final double? rating;
+
+  /// 职务：导演 / 编剧 / 制片等；演员为空串。
+  final String job;
+
+  /// 所属部门：演员为 Acting。
+  final String department;
+
+  /// 饰演角色；非演员为 null。
+  final String? character;
+
+  /// 主标题（英文在上）：对齐 Web 影人页作品卡，英文优先，回退原始标题。
+  String get primaryTitle {
+    for (final candidate in <String?>[englishTitle, title]) {
+      final value = candidate?.trim();
+      if (value != null && value.isNotEmpty) return value;
+    }
+    return title;
+  }
+
+  /// 副标题（中文在下）：与主标题重复或缺失时返回 null。
+  String? get secondaryTitle {
+    final chinese = chineseTitle?.trim();
+    if (chinese == null || chinese.isEmpty || chinese == primaryTitle) {
+      return null;
+    }
+    return chinese;
+  }
+
+  /// 角色或职务：演员优先展示饰演角色，否则展示职务；都没有时为 null。
+  String? get roleLabel {
+    for (final candidate in <String?>[character, job]) {
+      final value = candidate?.trim();
+      if (value != null && value.isNotEmpty) return value;
+    }
+    return null;
+  }
+
+  factory PersonCredit.fromJson(Map<String, dynamic> json) {
+    return PersonCredit(
+      titleId: (json['titleId'] as num?)?.toInt() ?? 0,
+      contentType: json['contentType'] as String? ?? 'movie',
+      title: json['title'] as String? ?? '',
+      chineseTitle: json['chineseTitle'] as String?,
+      englishTitle: json['englishTitle'] as String?,
+      releaseYear: (json['releaseYear'] as num?)?.toInt(),
+      posterUrl: json['posterUrl'] as String?,
+      playUrl: json['playUrl'] as String?,
+      rating: (json['rating'] as num?)?.toDouble(),
+      job: json['job'] as String? ?? '',
+      department: json['department'] as String? ?? '',
+      character: json['character'] as String?,
+    );
+  }
+}
+
+/// 影人详情：基础资料 + 参演 / 参与制作的作品（对照 `PublicPersonDetail`）。
+class PersonDetail {
+  const PersonDetail({
+    required this.id,
+    required this.name,
+    this.englishName,
+    this.gender = 'unknown',
+    this.avatarUrl,
+    this.biography,
+    this.credits = const <PersonCredit>[],
+  });
+
+  final int id;
+  final String name;
+  final String? englishName;
+
+  /// 'male' | 'female' | 'unknown'。
+  final String gender;
+  final String? avatarUrl;
+
+  /// 简介：中文优先，缺失回退英文。
+  final String? biography;
+  final List<PersonCredit> credits;
+
+  /// 头部大字号姓名：对齐 Web，英文优先，缺失回退中文名。
+  String get headlineName {
+    final english = englishName?.trim();
+    if (english != null && english.isNotEmpty) return english;
+    return name;
+  }
+
+  /// 头部副标题（中文名）：与主名重复或缺失时不重复渲染。
+  String? get secondaryName {
+    final chinese = name.trim();
+    if (chinese.isEmpty || chinese == headlineName) return null;
+    return chinese;
+  }
+
+  factory PersonDetail.fromJson(Map<String, dynamic> json) {
+    return PersonDetail(
+      id: (json['id'] as num?)?.toInt() ?? 0,
+      name: json['name'] as String? ?? '',
+      englishName: json['englishName'] as String?,
+      gender: json['gender'] as String? ?? 'unknown',
+      avatarUrl: json['avatarUrl'] as String?,
+      biography: json['biography'] as String?,
+      credits: (json['credits'] as List<dynamic>? ?? const <dynamic>[])
+          .whereType<Map<String, dynamic>>()
+          .map(PersonCredit.fromJson)
+          .toList(),
+    );
+  }
+}
+
+/// 合作影人：与该影人出现在同一部作品里的另一位影人（对照 `PublicCollaborator`）。
+class PersonCollaborator {
+  const PersonCollaborator({
+    required this.personId,
+    required this.name,
+    this.englishName,
+    this.gender = 'unknown',
+    this.avatarUrl,
+    this.sharedCount = 0,
+  });
+
+  final int personId;
+  final String name;
+  final String? englishName;
+
+  /// 'male' | 'female' | 'unknown'。
+  final String gender;
+  final String? avatarUrl;
+
+  /// 共同参演 / 参与制作的作品数。
+  final int sharedCount;
+
+  /// 展示名（英文在上）：英文优先，回退中文名。
+  String get headlineName {
+    final english = englishName?.trim();
+    if (english != null && english.isNotEmpty) return english;
+    return name;
+  }
+
+  /// 副标题（中文在下）：与主名重复或缺失时不重复渲染。
+  String? get secondaryName {
+    final chinese = name.trim();
+    if (chinese.isEmpty || chinese == headlineName) return null;
+    return chinese;
+  }
+
+  factory PersonCollaborator.fromJson(Map<String, dynamic> json) {
+    return PersonCollaborator(
+      personId: (json['personId'] as num?)?.toInt() ?? 0,
+      name: json['name'] as String? ?? '',
+      englishName: json['englishName'] as String?,
+      gender: json['gender'] as String? ?? 'unknown',
+      avatarUrl: json['avatarUrl'] as String?,
+      sharedCount: (json['sharedCount'] as num?)?.toInt() ?? 0,
+    );
+  }
+}

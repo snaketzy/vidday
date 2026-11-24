@@ -7,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:vidday_tv/core/api_client.dart';
 import 'package:vidday_tv/core/models.dart';
 import 'package:vidday_tv/ui/detail_page.dart';
+import 'package:vidday_tv/ui/person_page.dart';
 
 /// 注入式假 ApiClient：不发起任何真实网络请求，行为完全由夹具决定。
 class _FakeApi extends ApiClient {
@@ -43,6 +44,15 @@ class _FakeApi extends ApiClient {
   @override
   Future<TitleCredits> fetchCredits(int id) async =>
       credits ?? TitleCredits(id: id, contentType: detail.contentType);
+
+  /// 点击演职员卡推入 `PersonPage` 时使用，避免真实请求。
+  @override
+  Future<PersonDetail> fetchPerson(int id) async =>
+      PersonDetail(id: id, name: '影人 $id');
+
+  @override
+  Future<List<PersonCollaborator>> fetchPersonCollaborators(int id) async =>
+      const <PersonCollaborator>[];
 
   @override
   Future<List<CarouselCard>> fetchMyList() async => myList;
@@ -967,6 +977,89 @@ void main() {
       expect(find.byIcon(Icons.error_outline), findsNothing);
       expect(find.widgetWithText(FilledButton, '重试'), findsNothing);
       expect(find.text('测试影片'), findsWidgets);
+      expect(tester.takeException(), isNull);
+    });
+  });
+
+  group('AU-09 演职员与 Watching 可点击', () {
+    testWidgets('点 Watching 卡推入对应影片详情页，新页 titleId 匹配', (tester) async {
+      final api = _FakeApi(
+        detail: _movie(),
+        progress: const <WatchProgress>[
+          // 当前影片（进入续播，不在 Watching）
+          WatchProgress(
+            titleId: 1,
+            position: 839,
+            duration: 7433,
+            percent: 11.29,
+          ),
+          // 其它影片（Watching 卡，点击应进入其详情页）
+          WatchProgress(
+            titleId: 2,
+            position: 600,
+            duration: 1200,
+            percent: 50,
+            chineseTitle: '其他影片',
+          ),
+        ],
+      );
+      await _pumpDetail(tester, api, size: _wide);
+      expect(find.byType(DetailPage), findsOneWidget);
+
+      final card = find.text('其他影片');
+      await tester.ensureVisible(card);
+      await tester.pumpAndSettle();
+      await tester.tap(card);
+      await tester.pumpAndSettle();
+
+      // 下层路由在新页完全覆盖后转为 offstage，故计数需带上 offstage 子树。
+      final pages = tester
+          .widgetList<DetailPage>(find.byType(DetailPage, skipOffstage: false))
+          .toList();
+      expect(pages, hasLength(2));
+      expect(pages.map((page) => page.titleId), contains(2));
+      // 顶层（当前可见）即被推入的新页。
+      expect(tester.widget<DetailPage>(find.byType(DetailPage)).titleId, 2);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('点有影人 ID 的演职员卡推入影人页', (tester) async {
+      final api = _FakeApi(detail: _movie(), credits: _credits());
+      await _pumpDetail(tester, api, size: _wide);
+      expect(find.byType(PersonPage), findsNothing);
+
+      final card = find.text('张三');
+      await tester.ensureVisible(card);
+      await tester.pumpAndSettle();
+      await tester.tap(card);
+      await tester.pumpAndSettle();
+
+      expect(find.byType(PersonPage), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('点 personId 为 null 的演职员卡不产生任何导航', (tester) async {
+      final api = _FakeApi(
+        detail: _movie(),
+        credits: const TitleCredits(
+          id: 1,
+          contentType: 'movie',
+          cast: <CreditEntry>[
+            CreditEntry(name: '无影人', character: '路人'),
+          ],
+        ),
+      );
+      await _pumpDetail(tester, api, size: _wide);
+      expect(find.byType(DetailPage), findsOneWidget);
+
+      final card = find.text('无影人');
+      await tester.ensureVisible(card);
+      await tester.pumpAndSettle();
+      await tester.tap(card);
+      await tester.pumpAndSettle();
+
+      expect(find.byType(PersonPage), findsNothing);
+      expect(find.byType(DetailPage), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
   });
