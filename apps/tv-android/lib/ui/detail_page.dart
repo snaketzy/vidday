@@ -669,7 +669,7 @@ class _PortraitMovieHero extends StatelessWidget {
               ),
             ),
           ),
-          // 片名覆盖在渐隐区内，居中；英文在上（大字号）、中文在下（小一号），
+          // 片名覆盖在渐隐区内，居中；中文在上（大字号）、英文在下（小一号），
           // 长标题可增高，不裁切动态字体。
           SizedBox(
             width: double.infinity,
@@ -1160,7 +1160,7 @@ class _MovieBody extends StatelessWidget {
 
 /// 分层片名：`primary` 用大字号、`secondary`（可空）用小一号字号。
 ///
-/// 电影规则：英中都有 → 英文在上（大字号）、中文在下（小一号）；
+/// 电影规则：英中都有 → 中文在上（大字号）、英文在下（小一号）；
 /// 只有其一 → 只显示该条大字号；两条都缺 → 回退到 `title` 大字号。
 class _TitleLayers {
   const _TitleLayers(this.primary, this.secondary);
@@ -1173,7 +1173,7 @@ class _TitleLayers {
     final chinese = detail.chineseTitle?.trim() ?? '';
     final hasEnglish = english.isNotEmpty;
     final hasChinese = chinese.isNotEmpty;
-    if (hasEnglish && hasChinese) return _TitleLayers(english, chinese);
+    if (hasEnglish && hasChinese) return _TitleLayers(chinese, english);
     if (hasEnglish) return _TitleLayers(english, null);
     if (hasChinese) return _TitleLayers(chinese, null);
     return _TitleLayers(detail.title, null);
