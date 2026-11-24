@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 
 import '../core/models.dart';
 
-/// 品牌强调色（与 Web 端进度条同色）。
-const Color kAccent = Color(0xFFA31621);
+/// 品牌强调色（与 Web 端 `--brand` 同色）。
+const Color kAccent = Color(0xFFE50914);
 
 /// 深色背景。
 const Color kSurface = Color(0xFF0B0B0F);

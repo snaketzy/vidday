@@ -85,6 +85,63 @@ class ApiClient {
     return TitleDetail.fromJson(title);
   }
 
+  /// 影片 / 剧集完整演职员表（演员与职员分列）。
+  Future<TitleCredits> fetchCredits(int id) async {
+    final body = await _getJson('/public/titles/$id/credits');
+    final credits = body['credits'];
+    if (credits is! Map<String, dynamic>) {
+      throw ApiException('演职员数据格式异常');
+    }
+    return TitleCredits.fromJson(credits);
+  }
+
+  /// 本设备「我的片单」（含卡片摘要），供详情页判断当前影片是否已加入。
+  Future<List<CarouselCard>> fetchMyList() async {
+    final body = await _getJson('/public/list');
+    return (body['items'] as List<dynamic>? ?? const <dynamic>[])
+        .whereType<Map<String, dynamic>>()
+        .map(CarouselCard.fromJson)
+        .toList();
+  }
+
+  /// 加入片单（幂等，重复加入也成功）；失败由调用方静默处理。
+  Future<void> addToMyList(int titleId) =>
+      _putJson('/public/list', <String, dynamic>{'titleId': titleId});
+
+  /// 移出片单（空操作也返回成功）；失败由调用方静默处理。
+  Future<void> removeFromMyList(int titleId) =>
+      _deleteJson('/public/list/$titleId');
+
+  /// 本设备全部观看进度（含卡片摘要），按最近更新倒序。
+  ///
+  /// 详情页据此判断当前影片是否有可续播记录。
+  Future<List<WatchProgress>> fetchWatchProgress() async {
+    final body = await _getJson('/public/progress');
+    return (body['items'] as List<dynamic>? ?? const <dynamic>[])
+        .whereType<Map<String, dynamic>>()
+        .map(WatchProgress.fromJson)
+        .toList();
+  }
+
+  /// 写入单条观看进度（幂等 upsert）；失败由调用方静默处理。
+  Future<void> saveWatchProgress({
+    required int titleId,
+    int? episodeId,
+    required int position,
+    required int duration,
+    required double percent,
+    DateTime? updatedAt,
+  }) async {
+    await _putJson('/public/progress', <String, dynamic>{
+      'titleId': titleId,
+      'episodeId': ?episodeId,
+      'position': position,
+      'duration': duration,
+      'percent': percent,
+      'updatedAt': (updatedAt ?? DateTime.now().toUtc()).toIso8601String(),
+    });
+  }
+
   /// 上报一次播放会话的 QoE 数据（尽力而为，失败由调用方静默处理）。
   Future<void> reportQoe({
     required Map<String, dynamic> session,
@@ -97,24 +154,56 @@ class ApiClient {
     });
   }
 
-  Future<void> _postJson(String path, Map<String, dynamic> body) async {
+  Future<void> _postJson(String path, Map<String, dynamic> body) =>
+      _writeJson('post', path, body);
+
+  Future<void> _putJson(String path, Map<String, dynamic> body) =>
+      _writeJson('put', path, body);
+
+  /// 无请求体的 DELETE（成功判定 HTTP 200，错误壳解析沿用 `_describeError`）。
+  Future<void> _deleteJson(String path) async {
     if (!AppConfig.isConfigured) {
       throw ApiException('未注入 APP_API_KEY，请用 --dart-define 重新构建');
     }
 
     final uri = Uri.parse('${AppConfig.apiBaseUrl}$path');
+
     late final http.Response response;
     try {
-      response = await _client
-          .post(
-            uri,
-            headers: <String, String>{
-              ..._headers,
-              'content-type': 'application/json',
-            },
-            body: json.encode(body),
-          )
-          .timeout(_timeout);
+      response = await _client.delete(uri, headers: _headers).timeout(_timeout);
+    } on TimeoutException {
+      throw ApiException('请求超时，请检查网络');
+    } catch (error) {
+      throw ApiException('网络不可用：$error');
+    }
+
+    if (response.statusCode != 200) {
+      throw ApiException(_describeError(response), statusCode: response.statusCode);
+    }
+  }
+
+  Future<void> _writeJson(
+    String method,
+    String path,
+    Map<String, dynamic> body,
+  ) async {
+    if (!AppConfig.isConfigured) {
+      throw ApiException('未注入 APP_API_KEY，请用 --dart-define 重新构建');
+    }
+
+    final uri = Uri.parse('${AppConfig.apiBaseUrl}$path');
+    final headers = <String, String>{
+      ..._headers,
+      'content-type': 'application/json',
+    };
+    final payload = json.encode(body);
+
+    late final http.Response response;
+    try {
+      final request = method == 'put'
+          ? _client.put(uri, headers: headers, body: payload)
+          : _client.post(uri, headers: headers, body: payload);
+      response = await request.timeout(_timeout);
     } on TimeoutException {
       throw ApiException('请求超时，请检查网络');
     } catch (error) {
