@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../core/api_client.dart';
 import '../core/models.dart';
 import 'detail_page.dart';
+import 'expandable_text.dart';
 import 'widgets.dart';
 
 /// 影人页：基础资料 + 参演作品 + 合作影人，对齐 Web `/person/:id`。
@@ -68,6 +69,14 @@ class _PersonPageState extends State<PersonPage> {
       MaterialPageRoute<void>(
         builder: (_) => PersonPage(api: widget.api, personId: personId),
       ),
+    );
+  }
+
+  /// 打开简介全文弹层（复用详情页同一组件）：标题为影人显示名，左上角关闭。
+  Future<void> _openBiography(String title, String text) {
+    return showDialog<void>(
+      context: context,
+      builder: (_) => ExpandableTextDialog(title: title, text: text),
     );
   }
 
@@ -146,9 +155,9 @@ class _PersonPageState extends State<PersonPage> {
                 ),
               ),
               const SizedBox(height: 8),
-              Text(
-                biography,
-                style: const TextStyle(color: Colors.white70, height: 1.6),
+              ExpandableText(
+                text: biography,
+                onOpen: () => _openBiography(person.headlineName, biography),
               ),
             ],
             const SizedBox(height: 28),

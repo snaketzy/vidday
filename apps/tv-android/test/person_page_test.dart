@@ -1,8 +1,12 @@
+import 'dart:ui' show BoxHeightStyle;
+
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vidday_tv/core/api_client.dart';
 import 'package:vidday_tv/core/models.dart';
 import 'package:vidday_tv/ui/detail_page.dart';
+import 'package:vidday_tv/ui/expandable_text.dart';
 import 'package:vidday_tv/ui/person_page.dart';
 
 /// 注入式假 ApiClient：不发起任何真实网络请求，行为完全由夹具决定。
@@ -89,6 +93,13 @@ const PersonCollaborator _collaborator = PersonCollaborator(
   englishName: 'Co Star',
   sharedCount: 3,
 );
+
+/// 长简介末尾独有的句子，用于断言首屏已截断（不出现该句）。
+const String _biographyTail = '结尾独有句子，只有展开全文时才应出现。';
+
+/// 远超 3 行的长简介（1000+ 字符），末尾附上独有句子。
+final String _longBiography =
+    '${List<String>.filled(40, '这是一段很长的影人简介，用于验证影人页简介的折叠与展开行为。').join()}$_biographyTail';
 
 /// 挂载影人页并等待所有派生请求完成。
 Future<void> _pumpPerson(
@@ -239,6 +250,110 @@ void main() {
       expect(find.byIcon(Icons.error_outline), findsNothing);
       expect(find.widgetWithText(FilledButton, '重试'), findsNothing);
       expect(find.text('San Zhang'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+  });
+
+  group('AU-10 影人页简介复用 ExpandableText', () {
+    testWidgets('短简介：不出现 MORE，简介全文直接内联可见', (tester) async {
+      await _pumpPerson(tester, _FakeApi(person: _person()));
+
+      expect(find.text('简介'), findsOneWidget);
+      expect(find.byType(ExpandableText), findsOneWidget);
+      expect(find.text('MORE'), findsNothing);
+      expect(find.text('这是一段影人简介。'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('长简介：内联 3 行截断并出现 MORE，末尾句子不在首屏', (tester) async {
+      await _pumpPerson(
+        tester,
+        _FakeApi(person: _person(biography: _longBiography)),
+      );
+
+      expect(find.byType(ExpandableText), findsOneWidget);
+      expect(find.text('MORE'), findsOneWidget);
+
+      // 末尾独有句子在首屏（折叠态）不应出现。
+      expect(find.text(_biographyTail), findsNothing);
+
+      // 进一步证明是「截断」而非「全文铺开」：内联正文被钳制为 3 行 + 省略号。
+      final paragraph = tester.renderObject<RenderParagraph>(
+        find.text(_longBiography),
+      );
+      expect(paragraph.maxLines, 3);
+      expect(paragraph.overflow, TextOverflow.ellipsis);
+      final lineTops = paragraph
+          .getBoxesForSelection(
+            TextSelection(baseOffset: 0, extentOffset: _longBiography.length),
+            boxHeightStyle: BoxHeightStyle.max,
+          )
+          .map((box) => box.top.round())
+          .toSet();
+      expect(lineTops, hasLength(3));
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('点 MORE 打开弹层：标题为影人显示名，弹层含完整简介', (tester) async {
+      await _pumpPerson(
+        tester,
+        _FakeApi(person: _person(biography: _longBiography)),
+      );
+
+      final more = find.text('MORE');
+      await tester.ensureVisible(more);
+      await tester.pumpAndSettle();
+      await tester.tap(more);
+      await tester.pumpAndSettle();
+
+      final dialog = find.byType(ExpandableTextDialog);
+      expect(dialog, findsOneWidget);
+      // 弹层标题用影人显示名（headlineName 为英文名）。
+      expect(
+        find.descendant(of: dialog, matching: find.text('San Zhang')),
+        findsOneWidget,
+      );
+      // 弹层内为 biography 全文（含末尾独有句子）。
+      expect(
+        find.descendant(of: dialog, matching: find.textContaining(_biographyTail)),
+        findsOneWidget,
+      );
+      expect(find.byTooltip('关闭'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('关闭弹层后回到影人页，头部与参演作品等区块仍正常', (tester) async {
+      await _pumpPerson(
+        tester,
+        _FakeApi(
+          person: _person(
+            biography: _longBiography,
+            credits: const <PersonCredit>[_workCredit],
+          ),
+        ),
+      );
+
+      await tester.ensureVisible(find.text('MORE'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('MORE'));
+      await tester.pumpAndSettle();
+      expect(find.byType(ExpandableTextDialog), findsOneWidget);
+
+      await tester.tap(find.byTooltip('关闭'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(ExpandableTextDialog), findsNothing);
+      expect(find.text('San Zhang'), findsOneWidget);
+      expect(find.text('参演作品'), findsOneWidget);
+      expect(find.text('作品标题'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('biography 为空时不渲染「简介」标题', (tester) async {
+      await _pumpPerson(tester, _FakeApi(person: _person(biography: null)));
+
+      expect(find.text('简介'), findsNothing);
+      expect(find.byType(ExpandableText), findsNothing);
       expect(tester.takeException(), isNull);
     });
   });
