@@ -41,7 +41,11 @@ class _HomePageState extends State<HomePage> {
     ];
   }
 
-  void _reload() => setState(() => _future = _load());
+  void _reload() {
+    setState(() {
+      _future = _load();
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
