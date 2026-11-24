@@ -716,11 +716,11 @@ void main() {
         tester.getTopLeft(zh).dy,
         lessThan(tester.getTopLeft(en).dy),
       );
-      // 宽屏字号：中文 30、英文 24，中文更大。
+      // 宽屏字号：中文 30、英文 20，中文更大。
       final enSize = tester.widget<Text>(en).style!.fontSize;
       final zhSize = tester.widget<Text>(zh).style!.fontSize;
-      expect(zhSize, 30);
-      expect(enSize, 24);
+      expect(zhSize, closeTo(30.0, 0.01));
+      expect(enSize, closeTo(20.0, 0.01));
       expect(zhSize, greaterThan(enSize!));
       // 宽屏仍左对齐。
       expect(
@@ -799,11 +799,13 @@ void main() {
         tester.getTopLeft(zh).dy,
         lessThan(tester.getTopLeft(en).dy),
       );
-      // 竖屏字号：中文 (46*unit)、英文 (36*unit)，unit=1.0。
+      // 竖屏字号：中文 (46*unit)、英文 (30*unit)，unit=1.0。
       final enSize = tester.widget<Text>(en).style!.fontSize;
       final zhSize = tester.widget<Text>(zh).style!.fontSize;
       expect(zhSize, closeTo(46, 0.01));
-      expect(enSize, closeTo(36, 0.01));
+      expect(enSize, closeTo(30, 0.01));
+      // 英文副标题字号落在 (30*unit).clamp(18, 35) 的 clamp 区间内。
+      expect(enSize, inInclusiveRange(18, 35));
       expect(zhSize, greaterThan(enSize!));
       // 仍居中。
       expect(tester.getCenter(zh).dx, closeTo(227, 1));
