@@ -92,6 +92,23 @@
   - `flutter test test/detail_page_test.dart test/player_controls_test.dart test/player_progress_test.dart` 全过；对改动文件分析无新增告警。
   - 交付 Git Commit、变更文件清单、测试输出与未验证项；release 包与真机复验由主 Agent 负责。
 
+### AU-07｜电影详情页片名改为「中文在上、英文在下」
+- **负责人 / 工作树 / 分支 / 模块：** Android UI 子 Agent，`viddy-android-ui` / `feature/android-ui`，AND-UI 详情页；工作树 HEAD 现为 `e2a5463135b051127db226382cbcfe010e554bba`（含 `AU-03`~`AU-06`、`AP-03`~`AP-12`，已合入 `dev.all-platforms`），须在其之上开发。
+- **用户指令：** 「影片详情，影片名改为中上，英下」。**本卡取代 `AU-04` 目标第 1 项**（原为「英语在上、中文在下，中文字号小 1 号」）。
+- **目标 / 功能（主副关系整体对调）：**
+  - 中英都有 → **中文在上（大字号 = 主）**、**英文在下（小一号 = 副）**；
+  - 只有其一 → 只显示该条、用**大字号**（规则不变）；
+  - 两条都缺 → 回退 `TitleDetail.title`、用大字号（规则不变）。
+  - 字号沿用现有数值，只是作用于对调后的语言：宽屏 主 **30sp** / 副 **24sp（w600）**；竖屏 主 `(46*unit).clamp(28,52)` / 副 `(36*unit).clamp(22,42)`。**位置、行距（4dp）、阴影、居中方式、渐隐区一律不动。**
+  - 实现落点：`_TitleLayers.from()` 中 `if (hasEnglish && hasChinese) return _TitleLayers(chinese, english);`（现在返回 `_TitleLayers(english, chinese)`）。同时更新 `_TitleLayers` 与 `_PortraitMovieHero` 上方「英文在上、中文在下」的文档注释为「中文在上、英文在下」。
+  - 竖屏与宽屏**共用同一套规则**，两处调用点（`_PortraitMovieHero` 与 `_TitleText`）都要生效。
+- **保留（不得回退）：** 顶栏单行片名继续用 `detail.displayTitle`（其取值顺序本就优先中文）不变；`AU-03`/`AU-04` 其余全部视觉与交互（横屏播放按钮收窄到与次级图标行两侧对齐、返回组件贴顶、主按钮「播放 / 继续观看」、次级动作占位、`MORE` 全文弹层、演职员、`Watching`、只读进度条、片单切换）与 `AU-05` 的竖屏独立 `ScrollController`。
+- **写入 / 禁区：** `apps/tv-android/lib/ui/detail_page.dart`；**必须同步更新** `apps/tv-android/test/detail_page_test.dart`（既有断言假定「英文在上、中文在下、中文字号小于英文」，全部作废）。禁改其余全部文件（含已合并的 `player_page.dart`、`home_page.dart`、`latest_page.dart`）。
+- **输出 / 验收 / 交付：**
+  - `flutter test test/detail_page_test.dart test/player_controls_test.dart test/player_progress_test.dart` 全过；对改动文件分析无新增告警。
+  - 测试须断言（**竖屏 `420×900` 与宽屏 `900×420` 都要覆盖**）：中英都有时**中文的 `top` < 英文的 `top`**（中文在上）；**中文的 `fontSize` > 英文的**（中文为主）；只有英文 / 只有中文时只有一条且为大字号；两者都缺时回退 `detail.title` 且为大字号。同时**保留** `AU-04` 原有的横屏几何断言（返回贴顶、横屏播放按钮宽度 = 5 个图标行整体宽度、非横屏全宽）与 `AU-05` 的旋转回归用例。
+  - 交付 Git Commit、变更文件清单与测试输出；release 包与真机复验由主 Agent 负责。
+
 ## Apple 端调研（仅文档）
 
 ### IOS-UI-01｜iOS 浏览与触屏交互方案
