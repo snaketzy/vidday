@@ -82,6 +82,16 @@
   - 运行 `flutter test test/detail_page_test.dart`（既有用例与新增用例全过），并对改动文件确认无新增分析告警。`test/widget_test.dart` 的既有编译错误不在白名单内，如实登记即可，不作为本卡阻塞项。
   - 交付 Git Commit、变更文件清单、测试输出与真机复核说明；release 包与真机复验由主 Agent 负责。
 
+### AU-06｜详情页：`setState` 箭头闭包返回 `Future` 导致「重试」在 debug/test 下抛异常
+- **负责人 / 工作树 / 分支 / 模块：** Android UI 子 Agent，`viddy-android-ui` / `feature/android-ui`，AND-UI 详情页；基线 `f89eeb9c042901c53161ab496b9bfda291078e69`。该工作树 HEAD 现为 `0bcc0d2`（含 `AU-03`~`AU-05`、`AP-03`~`AP-12`，已合入 `dev.all-platforms`），须在其之上开发。
+- **缺陷（同一缺陷类，`QA-01` 已在 `home_page.dart:44` 实测复现）：** `apps/tv-android/lib/ui/detail_page.dart` 的 `void _reload() => setState(() => _future = widget.api.fetchTitle(widget.titleId));` —— 箭头闭包的返回值就是被赋的 `Future`，命中 Flutter `setState` 的 `setState() callback argument returned a Future` 断言。debug/test（断言开启）下点详情页错误态的「重试」会抛异常；release 下断言被裁掉，所以真机没暴露。
+- **目标 / 功能：** 改成块体闭包 `setState(() { _future = widget.api.fetchTitle(widget.titleId); });`。**只改这一处写法，不改任何行为语义。** 全仓同类已排查：`home_page.dart:44` 与 `latest_page.dart:27` 由 `QA-01` 负责（主 Agent 已批准其边界），本卡**不要**动这两个文件；其余 `setState(() => …)` 赋的都是非 `Future` 值，无需改动。
+- **写入 / 禁区：** `apps/tv-android/lib/ui/detail_page.dart`；可扩展 `apps/tv-android/test/detail_page_test.dart`。禁改其余全部文件（含已合并的 `player_page.dart`、`home_page.dart`、`latest_page.dart`）。
+- **输出 / 验收 / 交付：**
+  - 回归用例（**先证伪、再修**）：在 `test/detail_page_test.dart` 用注入式假 `ApiClient` 让 `fetchTitle` 首次抛错，挂载详情页 → 断言错误态与「重试」出现；点「重试」→ 断言请求次数 +1、错误态消失、正常内容出现。**先在未改 lib 时运行**，确认报出 `setState() callback argument returned a Future`（debug 下为断言），再修代码使其通过，两次输出都写进报告。
+  - `flutter test test/detail_page_test.dart test/player_controls_test.dart test/player_progress_test.dart` 全过；对改动文件分析无新增告警。
+  - 交付 Git Commit、变更文件清单、测试输出与未验证项；release 包与真机复验由主 Agent 负责。
+
 ## Apple 端调研（仅文档）
 
 ### IOS-UI-01｜iOS 浏览与触屏交互方案
