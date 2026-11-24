@@ -15,6 +15,7 @@ class _FakeApi extends ApiClient {
     this.credits,
     this.progress = const <WatchProgress>[],
     this.myList = const <CarouselCard>[],
+    this.failFirstFetch = false,
   }) : super(deviceId: 'test-device');
 
   final TitleDetail detail;
@@ -22,11 +23,22 @@ class _FakeApi extends ApiClient {
   final List<WatchProgress> progress;
   final List<CarouselCard> myList;
 
+  /// 为 true 时首次 `fetchTitle` 抛 `ApiException`，其后正常返回，
+  /// 用于构造详情页错误态并验证错误态「重试」入口。
+  final bool failFirstFetch;
+
   int addCalls = 0;
   int removeCalls = 0;
+  int fetchTitleCalls = 0;
 
   @override
-  Future<TitleDetail> fetchTitle(int id) async => detail;
+  Future<TitleDetail> fetchTitle(int id) async {
+    fetchTitleCalls++;
+    if (failFirstFetch && fetchTitleCalls == 1) {
+      throw ApiException('首次加载失败', statusCode: 500);
+    }
+    return detail;
+  }
 
   @override
   Future<TitleCredits> fetchCredits(int id) async =>
@@ -928,6 +940,31 @@ void main() {
         tester.widget<ColoredBox>(topBarBox).color,
         const Color(0xE61A1A22),
       );
+      expect(tester.takeException(), isNull);
+    });
+  });
+
+  group('AU-06 详情页错误态重试', () {
+    testWidgets('首次请求失败进入错误态，点「重试」重新请求并恢复内容且无异常', (tester) async {
+      final api = _FakeApi(detail: _movie(), failFirstFetch: true);
+      await _pumpDetail(tester, api);
+
+      // 错误态：错误图标 + 可点的「重试」按钮，正常内容尚未渲染。
+      expect(find.byIcon(Icons.error_outline), findsOneWidget);
+      final retry = find.widgetWithText(FilledButton, '重试');
+      expect(retry, findsOneWidget);
+      expect(find.text('测试影片'), findsNothing);
+      expect(api.fetchTitleCalls, 1);
+
+      // 触发错误态里真实的「重试」入口。
+      await tester.tap(retry);
+      await tester.pumpAndSettle();
+
+      // 重新发起请求，错误态消失、正常内容出现，且整个过程无异常。
+      expect(api.fetchTitleCalls, 2);
+      expect(find.byIcon(Icons.error_outline), findsNothing);
+      expect(find.widgetWithText(FilledButton, '重试'), findsNothing);
+      expect(find.text('测试影片'), findsWidgets);
       expect(tester.takeException(), isNull);
     });
   });

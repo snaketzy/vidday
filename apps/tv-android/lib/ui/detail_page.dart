@@ -77,8 +77,11 @@ class _DetailPageState extends State<DetailPage> {
     super.dispose();
   }
 
-  void _reload() =>
-      setState(() => _future = widget.api.fetchTitle(widget.titleId));
+  void _reload() {
+    setState(() {
+      _future = widget.api.fetchTitle(widget.titleId);
+    });
+  }
 
   /// 读取本设备进度并刷新续播按钮；失败静默（按无记录处理）。
   Future<void> _loadProgress() async {
