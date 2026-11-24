@@ -124,6 +124,25 @@
   - 测试须断言（竖屏 `454×1000`（`unit == 1.0`）与宽屏 `1100×2200`）：中文在上（`中文.top < 英文.top`）、**中文 fontSize > 英文 fontSize**，且**英文副标题的 fontSize 精确等于新值**（宽屏 `20.0`；竖屏 `unit==1.0` 时 `30.0`，并额外断言其落在 `[18, 35]` 的 clamp 区间内）；主标题字号仍为 `30.0` / `46.0`。
   - 交付 Git Commit、变更文件清单与测试输出；release 包与真机复验由主 Agent 负责。
 
+### AU-09｜详情页演职员与 Watching 可点击（含新建影人页）
+- **负责人 / 工作树 / 分支 / 模块：** Android UI 子 Agent，`viddy-android-ui` / `feature/android-ui`，AND-UI 详情页 + 新增影人页；工作树 HEAD 现为 `0820d473831bf36c8037eb168480217a86c4ae85`，须在其之上开发。
+- **用户指令：** 「影片详情页的演职员都无法点击，watching 的影片也无法点击。修复这个问题」。
+- **根因（已核实）：** ① `_WatchingRail`/`_WatchingCard`（`detail_page.dart` 约 1726-1850 行）**没有任何 tap 处理器**；② 演职员人物卡同样无可点入口；③ Android 侧**根本没有影人页**（`lib/ui/` 下无 `person_page.dart`），而 Web 端已有 `/person/:id`（`apps/web/src/pages/person-page.tsx`、路由 `apps/web/src/App.tsx:61`），演职员卡在 Web 上就是链到该页（`apps/web/src/components/title/credit-rail.tsx:30-36`，且 `personId === null` 时**不可点**）。后端契约齐备：`GET /public/people/:id`、`GET /public/people/:id/collaborators`（`server/src/routes/people.ts`）。
+- **目标 / 功能：**
+  1. **Watching 卡片可点击**：整张卡片为命中区，点击 → 推入**该影片的详情页**（同一 `api`，`item.titleId` + 其 `contentType`）。抽一个 `_openTitle(...)` 内部方法作为统一入口，返回后本页状态与滚动位置不变（`push`，不替换）。
+  2. **演职员人物卡可点击**：`personId != null` → 推入**影人页**；`personId == null`（影人已删除，仅余冗余姓名）→ **不可点**，给出说明性占位（沿用页面既有「暂不可用」风格），**不得伪造跳转**。竖屏（`_PortraitCredits`）与宽屏（`_CreditsRail`）两处调用点都要生效。
+  3. **新建影人页 `lib/ui/person_page.dart`（对齐 Web `/person/:id`）：** 头部（返回 + 「影人」小标 + 英文名大字号 + 中文名副标题 + 可选「简介」`biography` 全文）、「参演作品」（海报卡：中/英片名、年份与角色/职务；点击 → 该影片详情页）、「合作过的演职人员」（圆头像 + 中英姓名 + 「合作 N 部」；点击 → 再推入一个影人页，可自递归）。合作影人接口失败**静默隐藏**（对齐 Web `person-page.tsx:114`）；影人详情失败显示错误态与「重试」（复用 `widgets.dart` 的 `ErrorView`）。
+  4. **数据层：** `core/models.dart` 新增 `PersonCredit`、`PersonDetail`、`PersonCollaborator` 及 `fromJson`；`core/api_client.dart` 新增 `Future<PersonDetail> fetchPerson(int id)` 与 `Future<List<PersonCollaborator>> fetchPersonCollaborators(int id)`，沿用文件既有请求/错误处理风格。字段**严格按契约**（`server/src/contract.ts:280-332`）：
+     - `PublicPersonDetail = { id, name, englishName, gender, avatarUrl, biography, credits[] }`
+     - `PublicPersonCredit = { titleId, contentType, title, chineseTitle, englishTitle, releaseYear, posterUrl, playUrl, rating, job, department, character }`
+     - `PublicCollaborator = { personId, name, englishName, gender, avatarUrl, sharedCount }`
+- **写入 / 禁区：** `apps/tv-android/lib/ui/detail_page.dart`、`apps/tv-android/lib/ui/person_page.dart`（**新增**）、`apps/tv-android/lib/core/api_client.dart`、`apps/tv-android/lib/core/models.dart`、`apps/tv-android/test/detail_page_test.dart`、`apps/tv-android/test/person_page_test.dart`（**新增**）。`lib/ui/widgets.dart` 只读复用（`RemoteImage`、`ErrorView` 等），**禁改**。禁改 `player_page.dart`、`shell_page.dart`、`home_page.dart`、`latest_page.dart`、`catalog.dart`、`main.dart`、`pubspec.yaml`、`android/**`、服务端、Web、其他工作树与公开契约。
+- **注意：** 错误态里的重试必须用**块体闭包** `setState(() { ... });`（`AU-06` 已确立：箭头闭包返回 `Future` 会命中 `setState() callback argument returned a Future` 断言）。
+- **输出 / 验收 / 交付：**
+  - `flutter test`（全量，含新增 `person_page_test.dart`）全过；`dart analyze` 无新增告警。
+  - 测试至少覆盖：点 Watching 卡片后 `find.byType(DetailPage)` 计数为 2（新页被推入）；点 `personId` 非空的演职员卡后 `PersonPage` 出现；`personId` 为 null 的卡片点击**不产生**任何导航；影人页头部渲染中英姓名与简介；点「参演作品」卡片推入 `DetailPage`；点「合作影人」卡片再推入一个 `PersonPage`；合作影人接口失败时该区块静默隐藏且无异常；影人详情失败时错误态 + 「重试」可恢复（且无 `setState` 断言）。
+  - 交付 Git Commit、变更文件清单、测试输出与未验证项；release 包与真机复验由主 Agent 负责。
+
 ## Apple 端调研（仅文档）
 
 ### IOS-UI-01｜iOS 浏览与触屏交互方案
