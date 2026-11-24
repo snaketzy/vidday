@@ -208,3 +208,206 @@ class TitleDetail {
     );
   }
 }
+
+/// 单条演职员署名（对照 `PublicCreditEntry`）。
+class CreditEntry {
+  const CreditEntry({
+    this.personId,
+    required this.name,
+    this.englishName,
+    this.gender = 'unknown',
+    this.avatarUrl,
+    this.department = '',
+    this.job = '',
+    this.character,
+  });
+
+  /// 影人 ID；影人已删除时为 null（仅保留冗余姓名）。
+  final int? personId;
+  final String name;
+  final String? englishName;
+
+  /// 'male' | 'female' | 'unknown'。
+  final String gender;
+  final String? avatarUrl;
+
+  /// 所属部门：演员为 Acting。
+  final String department;
+
+  /// 职务：导演 / 编剧 / 制片等。
+  final String job;
+
+  /// 饰演角色；非演员为 null。
+  final String? character;
+
+  /// 展示名：中文优先，回退英文名，最后回退空串。
+  String get displayName {
+    for (final candidate in <String?>[name, englishName]) {
+      final value = candidate?.trim();
+      if (value != null && value.isNotEmpty) return value;
+    }
+    return name;
+  }
+
+  /// 人物卡副标题：演员优先展示角色，否则展示职务；都没有时为 null。
+  String? get roleLabel {
+    for (final candidate in <String?>[character, job]) {
+      final value = candidate?.trim();
+      if (value != null && value.isNotEmpty) return value;
+    }
+    return null;
+  }
+
+  factory CreditEntry.fromJson(Map<String, dynamic> json) {
+    return CreditEntry(
+      personId: (json['personId'] as num?)?.toInt(),
+      name: json['name'] as String? ?? '',
+      englishName: json['englishName'] as String?,
+      gender: json['gender'] as String? ?? 'unknown',
+      avatarUrl: json['avatarUrl'] as String?,
+      department: json['department'] as String? ?? '',
+      job: json['job'] as String? ?? '',
+      character: json['character'] as String?,
+    );
+  }
+}
+
+/// 单部作品的完整演职员表（对照 `PublicTitleCredits`）。
+///
+/// 演员与职员分开，便于前台分组展示；缺失字段一律给安全默认值。
+class TitleCredits {
+  const TitleCredits({
+    required this.id,
+    required this.contentType,
+    this.cast = const <CreditEntry>[],
+    this.crew = const <CreditEntry>[],
+  });
+
+  final int id;
+  final String contentType;
+
+  /// 演员（department = Acting），按署名顺序。
+  final List<CreditEntry> cast;
+
+  /// 职员（导演 / 编剧 / 制片等），按署名顺序。
+  final List<CreditEntry> crew;
+
+  bool get isEmpty => cast.isEmpty && crew.isEmpty;
+
+  factory TitleCredits.fromJson(Map<String, dynamic> json) {
+    return TitleCredits(
+      id: (json['id'] as num?)?.toInt() ?? 0,
+      contentType: json['contentType'] as String? ?? 'movie',
+      cast: (json['cast'] as List<dynamic>? ?? const <dynamic>[])
+          .whereType<Map<String, dynamic>>()
+          .map(CreditEntry.fromJson)
+          .toList(),
+      crew: (json['crew'] as List<dynamic>? ?? const <dynamic>[])
+          .whereType<Map<String, dynamic>>()
+          .map(CreditEntry.fromJson)
+          .toList(),
+    );
+  }
+}
+
+/// 观看进度条目（对照 `PublicWatchProgress`）。
+///
+/// 进度归属以作品 ID（后端 `targetId`）为准，`episodeId` 为剧集单集 ID、
+/// 电影为 null；单位统一为秒与百分比（0–100）。
+/// 后端响应是「卡片摘要 + 进度字段」，故一并保留卡片展示所需字段，
+/// 供详情页 `Watching` 区渲染真实记录（不额外请求）。
+class WatchProgress {
+  const WatchProgress({
+    required this.titleId,
+    this.episodeId,
+    required this.position,
+    required this.duration,
+    required this.percent,
+    this.updatedAt,
+    this.title = '',
+    this.chineseTitle,
+    this.englishTitle,
+    this.posterUrl,
+    this.backdropUrl,
+  });
+
+  /// 作品 ID；栏目卡片 id 不总是作品 ID，故取 `targetId`。
+  final int titleId;
+  final int? episodeId;
+
+  /// 已观看位置（秒）。
+  final int position;
+
+  /// 总时长（秒）。
+  final int duration;
+
+  /// 已观看百分比（0–100）。
+  final double percent;
+  final DateTime? updatedAt;
+
+  /// 卡片摘要（`Watching` 区用）；缺失时给安全默认值。
+  final String title;
+  final String? chineseTitle;
+  final String? englishTitle;
+  final String? posterUrl;
+  final String? backdropUrl;
+
+  /// 是否可续播：位置与时长有效，且未接近片尾（达到 98% 视为已看完）。
+  bool get isResumable => position > 0 && duration > 0 && percent < 98;
+
+  /// 中文优先，其次英文，最后回退原始标题。
+  String get displayTitle {
+    for (final candidate in <String?>[chineseTitle, englishTitle, title]) {
+      final value = candidate?.trim();
+      if (value != null && value.isNotEmpty) return value;
+    }
+    return title;
+  }
+
+  factory WatchProgress.fromJson(Map<String, dynamic> json) {
+    final percent = (json['percent'] as num?)?.toDouble() ?? 0;
+    return WatchProgress(
+      titleId: (json['targetId'] as num?)?.toInt() ??
+          (json['id'] as num?)?.toInt() ??
+          0,
+      episodeId: (json['episodeId'] as num?)?.toInt(),
+      position: (json['position'] as num?)?.toInt() ?? 0,
+      duration: (json['duration'] as num?)?.toInt() ?? 0,
+      percent: percent.isFinite ? percent.clamp(0, 100).toDouble() : 0,
+      updatedAt: json['updatedAt'] is String
+          ? DateTime.tryParse(json['updatedAt'] as String)
+          : null,
+      title: json['title'] as String? ?? '',
+      chineseTitle: json['chineseTitle'] as String?,
+      englishTitle: json['englishTitle'] as String?,
+      posterUrl: json['posterUrl'] as String?,
+      backdropUrl: json['backdropUrl'] as String?,
+    );
+  }
+
+  /// 由播放器当前位置即时构造记录（暂停 / 退播 / 退后台上报，及回传详情页）。
+  factory WatchProgress.fromPlayback({
+    required int titleId,
+    int? episodeId,
+    required int position,
+    required int duration,
+    DateTime? updatedAt,
+  }) {
+    final safeDuration = duration > 0 ? duration : 0;
+    final safePosition = position.clamp(0, safeDuration).toInt();
+    return WatchProgress(
+      titleId: titleId,
+      episodeId: episodeId,
+      position: safePosition,
+      duration: safeDuration,
+      percent: progressPercent(safePosition, safeDuration),
+      updatedAt: updatedAt ?? DateTime.now().toUtc(),
+    );
+  }
+}
+
+/// 计算观看百分比（0–100）；时长无效时返回 0。
+double progressPercent(int position, int duration) {
+  if (duration <= 0 || position <= 0) return 0;
+  return (position / duration * 100).clamp(0, 100).toDouble();
+}
