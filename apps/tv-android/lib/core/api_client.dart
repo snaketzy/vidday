@@ -95,6 +95,25 @@ class ApiClient {
     return TitleCredits.fromJson(credits);
   }
 
+  /// 影人资料与参演作品（`GET /public/people/:id`）。
+  Future<PersonDetail> fetchPerson(int id) async {
+    final body = await _getJson('/public/people/$id');
+    final person = body['person'];
+    if (person is! Map<String, dynamic>) {
+      throw ApiException('影人数据格式异常');
+    }
+    return PersonDetail.fromJson(person);
+  }
+
+  /// 合作影人（`GET /public/people/:id/collaborators`）；失败由调用方静默处理。
+  Future<List<PersonCollaborator>> fetchPersonCollaborators(int id) async {
+    final body = await _getJson('/public/people/$id/collaborators');
+    return (body['collaborators'] as List<dynamic>? ?? const <dynamic>[])
+        .whereType<Map<String, dynamic>>()
+        .map(PersonCollaborator.fromJson)
+        .toList();
+  }
+
   /// 本设备「我的片单」（含卡片摘要），供详情页判断当前影片是否已加入。
   Future<List<CarouselCard>> fetchMyList() async {
     final body = await _getJson('/public/list');

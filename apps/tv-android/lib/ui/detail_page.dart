@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 
 import '../core/api_client.dart';
 import '../core/models.dart';
+import 'person_page.dart';
 import 'player_page.dart';
 import 'widgets.dart';
 
@@ -186,6 +187,28 @@ class _DetailPageState extends State<DetailPage> {
     unawaited(_loadProgress());
   }
 
+  /// 打开某影片详情页的统一入口：`Watching` 卡与影人页作品卡复用同一语义。
+  ///
+  /// 以 `push` 推入新页（非 `pushReplacement`），返回后本页状态与滚动位置保留。
+  Future<void> _openTitle(int titleId) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => DetailPage(api: widget.api, titleId: titleId),
+      ),
+    );
+  }
+
+  /// 打开影人页；署名人名缺失（`personId == null`，影人已删除）时不跳转。
+  Future<void> _openPerson(CreditEntry entry) async {
+    final personId = entry.personId;
+    if (personId == null) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => PersonPage(api: widget.api, personId: personId),
+      ),
+    );
+  }
+
   /// 续播按钮上的时间戳，固定 HH:MM:SS。
   String _formatClock(int seconds) {
     final h = (seconds ~/ 3600).toString().padLeft(2, '0');
@@ -263,6 +286,8 @@ class _DetailPageState extends State<DetailPage> {
                     onToggleList: () => _toggleMyList(detail.id),
                     onOpenSynopsis: (text) =>
                         _openSynopsis(detail.displayTitle, text),
+                    onOpenTitle: _openTitle,
+                    onOpenCredit: _openPerson,
                     formatClock: _formatClock,
                     playLabel: _playLabel(detail),
                   ),
@@ -439,7 +464,11 @@ class _DetailPageState extends State<DetailPage> {
                       ),
                       if (credits != null && !credits.isEmpty) ...<Widget>[
                         SizedBox(height: 15 * unit),
-                        _CastRail(credits: credits, portraitUnit: unit),
+                        _CastRail(
+                          credits: credits,
+                          portraitUnit: unit,
+                          onOpen: _openPerson,
+                        ),
                       ],
                       if (watching.isNotEmpty)
                         Padding(
@@ -448,6 +477,7 @@ class _DetailPageState extends State<DetailPage> {
                             items: watching,
                             formatClock: _formatClock,
                             light: true,
+                            onOpen: (item) => _openTitle(item.titleId),
                           ),
                         ),
                     ],
@@ -1052,6 +1082,8 @@ class _MovieBody extends StatelessWidget {
     required this.onPlay,
     required this.onToggleList,
     required this.onOpenSynopsis,
+    required this.onOpenTitle,
+    required this.onOpenCredit,
     required this.formatClock,
     required this.playLabel,
   });
@@ -1069,6 +1101,8 @@ class _MovieBody extends StatelessWidget {
   final VoidCallback onPlay;
   final VoidCallback onToggleList;
   final ValueChanged<String> onOpenSynopsis;
+  final ValueChanged<int> onOpenTitle;
+  final ValueChanged<CreditEntry> onOpenCredit;
   final String Function(int) formatClock;
   final String playLabel;
 
@@ -1139,11 +1173,15 @@ class _MovieBody extends StatelessWidget {
             ],
             if (credits != null && !credits!.isEmpty) ...<Widget>[
               const SizedBox(height: 32),
-              _CastRail(credits: credits!),
+              _CastRail(credits: credits!, onOpen: onOpenCredit),
             ],
             if (watching.isNotEmpty) ...<Widget>[
               const SizedBox(height: 28),
-              _WatchingRail(items: watching, formatClock: formatClock),
+              _WatchingRail(
+                items: watching,
+                formatClock: formatClock,
+                onOpen: (item) => onOpenTitle(item.titleId),
+              ),
             ],
           ],
         );
@@ -1571,10 +1609,16 @@ class _WatchProgressBar extends StatelessWidget {
 }
 
 /// 演职员横向列表：人物卡显示姓名与可用的角色或职务，无头像仍可识别。
+/// 有影人 ID 的卡片可点进入影人页；人名缺失（`personId == null`）的卡片不可点。
 class _CastRail extends StatelessWidget {
-  const _CastRail({required this.credits, this.portraitUnit});
+  const _CastRail({
+    required this.credits,
+    required this.onOpen,
+    this.portraitUnit,
+  });
 
   final TitleCredits credits;
+  final ValueChanged<CreditEntry> onOpen;
   final double? portraitUnit;
 
   @override
@@ -1607,6 +1651,7 @@ class _CastRail extends StatelessWidget {
               entry: people[index],
               size: avatarSize,
               light: unit != null,
+              onOpen: people[index].personId == null ? null : onOpen,
             ),
           ),
         ),
@@ -1659,11 +1704,15 @@ class _CreditCard extends StatelessWidget {
     required this.entry,
     required this.size,
     required this.light,
+    this.onOpen,
   });
 
   final CreditEntry entry;
   final double size;
   final bool light;
+
+  /// 点击回调；为 null 表示该署名没有影人 ID（影人已删除），卡片不可点。
+  final ValueChanged<CreditEntry>? onOpen;
 
   static const nameStyle = TextStyle(fontSize: 13, fontWeight: FontWeight.w600);
   static const roleStyle = TextStyle(fontSize: 12);
@@ -1690,7 +1739,7 @@ class _CreditCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final role = entry.roleLabel;
-    return SizedBox(
+    final content = SizedBox(
       width: size,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1720,19 +1769,33 @@ class _CreditCard extends StatelessWidget {
         ],
       ),
     );
+
+    final onOpen = this.onOpen;
+    if (onOpen == null) {
+      // 影人已删除：不可点（不推入影人页、不发起请求），仅给出说明性占位提示。
+      return Tooltip(message: '该影人资料暂不可用', child: content);
+    }
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () => onOpen(entry),
+      child: content,
+    );
   }
 }
 
 /// `DETAIL-03` `Watching` 区：仅在有真实观看数据时渲染，位于演职员之后。
+/// 每张卡片可点进入对应影片详情页。
 class _WatchingRail extends StatelessWidget {
   const _WatchingRail({
     required this.items,
     required this.formatClock,
+    required this.onOpen,
     this.light = false,
   });
 
   final List<WatchProgress> items;
   final String Function(int) formatClock;
+  final ValueChanged<WatchProgress> onOpen;
   final bool light;
 
   @override
@@ -1752,6 +1815,7 @@ class _WatchingRail extends StatelessWidget {
               item: items[index],
               formatClock: formatClock,
               light: light,
+              onTap: () => onOpen(items[index]),
             ),
           ),
         ),
@@ -1760,56 +1824,62 @@ class _WatchingRail extends StatelessWidget {
   }
 }
 
-/// `Watching` 区单张卡片：海报 + 片名 + 已看位置。
+/// `Watching` 区单张卡片：海报 + 片名 + 已看位置；整张卡为命中区。
 class _WatchingCard extends StatelessWidget {
   const _WatchingCard({
     required this.item,
     required this.formatClock,
     required this.light,
+    required this.onTap,
   });
 
   final WatchProgress item;
   final String Function(int) formatClock;
   final bool light;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     return SizedBox(
       width: 112,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          // 海报占满卡片剩余高度：随轨道高度自适应，避免文字行把卡片撑溢出。
-          Expanded(
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(10),
-              child: SizedBox(
-                width: 112,
-                child: RemoteImage(url: item.posterUrl ?? item.backdropUrl),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            // 海报占满卡片剩余高度：随轨道高度自适应，避免文字行把卡片撑溢出。
+            Expanded(
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(10),
+                child: SizedBox(
+                  width: 112,
+                  child: RemoteImage(url: item.posterUrl ?? item.backdropUrl),
+                ),
               ),
             ),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            item.displayTitle,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              color: light ? _portraitInk : Colors.white,
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
+            const SizedBox(height: 6),
+            Text(
+              item.displayTitle,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: light ? _portraitInk : Colors.white,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
             ),
-          ),
-          Text(
-            '已看 ${formatClock(item.position)}',
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              color: light ? _portraitMuted : Colors.white54,
-              fontSize: 12,
+            Text(
+              '已看 ${formatClock(item.position)}',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: light ? _portraitMuted : Colors.white54,
+                fontSize: 12,
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
