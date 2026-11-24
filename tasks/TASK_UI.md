@@ -143,6 +143,26 @@
   - 测试至少覆盖：点 Watching 卡片后 `find.byType(DetailPage)` 计数为 2（新页被推入）；点 `personId` 非空的演职员卡后 `PersonPage` 出现；`personId` 为 null 的卡片点击**不产生**任何导航；影人页头部渲染中英姓名与简介；点「参演作品」卡片推入 `DetailPage`；点「合作影人」卡片再推入一个 `PersonPage`；合作影人接口失败时该区块静默隐藏且无异常；影人详情失败时错误态 + 「重试」可恢复（且无 `setState` 断言）。
   - 交付 Git Commit、变更文件清单、测试输出与未验证项；release 包与真机复验由主 Agent 负责。
 
+### AU-10｜影人页简介复用详情页的 `MORE` 折叠弹层
+- **负责人 / 工作树 / 分支 / 模块：** Android UI 子 Agent，`viddy-android-ui` / `feature/android-ui`，AND-UI 详情页 + 影人页；工作树 HEAD 现为 `887c17c1bcebf0ef3e622008c2fa3ff48d271e9a`，须在其之上开发。
+- **用户指令：** 「影人页复用」——承接 `AU-09` 报告中的建议：影人页「简介」目前是**全文铺开**（Owen Wilson 的维基简介约 2000px 高，把「参演作品」挤到首屏之外），而详情页的剧情简介早有 `MORE` 内联截断 + 居中弹层（`DETAIL-02`）。要求影人页**复用同一套**。
+- **目标 / 功能：**
+  1. **提取共享组件（新增文件 `apps/tv-android/lib/ui/expandable_text.dart`）**：把 `detail_page.dart` 中现有的私有类
+     - `_ExpandableSynopsis`（`detail_page.dart` 约 1440-1530 行：正文内联 `maxLines: 3` 截断，仅在内容超出时于末行末尾显示 `MORE`，`MORE` 预留宽度 60）
+     - `_SynopsisDialog`（约 1957 行起：居中弹层，顶部居中标题、左上角关闭）
+     **原样搬移**并改名为 `ExpandableText` / `ExpandableTextDialog`。**行为、样式与阈值逐字保持**：`maxLines = 3`、`_moreSlot = 60`、正文 `TextStyle(color: Colors.white70, height: 1.6, fontSize: 15)`、`MORE` 用 `kAccent` + `w700` + `letterSpacing: 1`、以及 `LayoutBuilder` + `TextPainter` 的「先按完整宽度判定是否溢出」逻辑。`kAccent` 继续从 `ui/widgets.dart` **只读**引入。
+  2. **详情页改为使用新组件**：`detail_page.dart` 里剧情简介的内联与弹层（含 `_openSynopsis`）改用 `ExpandableText` / `ExpandableTextDialog`，**删除**旧私有类。详情页的可见行为与既有测试断言**不得发生任何变化**。
+  3. **影人页复用**：`person_page.dart` 的「简介」区块改为使用同一组件——内联 3 行截断 + 末行 `MORE`，点击打开同一个居中弹层（标题用影人显示名，居中；左上角关闭，弹层内为 `biography` 全文）。`biography` 为空时**整个「简介」区块不渲染**（保持现状）。
+- **写入 / 禁区：** `apps/tv-android/lib/ui/expandable_text.dart`（**新增**）、`apps/tv-android/lib/ui/detail_page.dart`、`apps/tv-android/lib/ui/person_page.dart`、`apps/tv-android/test/detail_page_test.dart`、`apps/tv-android/test/person_page_test.dart`。`ui/widgets.dart` **只读**（引入 `kAccent`），**禁改**（与 `AU-01` 共享）。禁改 `player_page.dart`、`shell_page.dart`、`home_page.dart`、`latest_page.dart`、`core/**`、`main.dart`、`pubspec.yaml`、`android/**`、Web、服务端、其他工作树与公开契约。
+- **注意：** 弹层的开合用 `showDialog`，不要在页面 State 里用箭头闭包给 `setState` 赋值 `Future`（`AU-06` 已确立的教训，用块体闭包）。
+- **输出 / 验收 / 交付：**
+  - `flutter test`（全量，含 `person_page_test.dart` 新增用例）全过；`dart analyze` 无新增告警。
+  - 必须覆盖的断言：
+    - **详情页回归**：既有断言全部保持通过，包括「简介超出 3 行时末行出现 `MORE`」「点击 `MORE` 打开居中弹层并显示全文」「弹层可关闭」，且**组件行为与提取前一致**（提取属于纯搬迁，不得顺手改样式）。
+    - **影人页**：① 短简介（不足 3 行）→ **不出现** `MORE`，且全文直接内联；② 长简介（远超 3 行）→ 出现 `MORE`，且**首屏不出现简介末尾句子**（证明已截断，而不是仍全文铺开）；③ 点 `MORE` → 弹层出现、标题为影人显示名、弹层内包含完整 `biography`；④ 关闭弹层后回到影人页且其余区块正常；⑤ `biography` 为空 → 不渲染「简介」标题。
+    - **不再有重复实现**：`grep` 确认 `detail_page.dart` 与 `person_page.dart` 都不再各自实现截断逻辑（两处都引用 `ExpandableText`）。
+  - 交付 Git Commit、变更文件清单、测试输出与未验证项；release 包与真机复验由主 Agent 负责。
+
 ## Apple 端调研（仅文档）
 
 ### IOS-UI-01｜iOS 浏览与触屏交互方案
