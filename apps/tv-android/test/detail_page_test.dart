@@ -7,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:vidday_tv/core/api_client.dart';
 import 'package:vidday_tv/core/models.dart';
 import 'package:vidday_tv/ui/detail_page.dart';
+import 'package:vidday_tv/ui/expandable_text.dart';
 import 'package:vidday_tv/ui/person_page.dart';
 
 /// 注入式假 ApiClient：不发起任何真实网络请求，行为完全由夹具决定。
@@ -512,6 +513,43 @@ void main() {
         expect(find.byType(Dialog), findsNothing);
       });
     }
+  });
+
+  group('AU-10 详情页复用共享 ExpandableText', () {
+    testWidgets('宽屏长简介使用 ExpandableText，点 MORE 打开 ExpandableTextDialog 显示全文', (
+      tester,
+    ) async {
+      await _pumpDetail(
+        tester,
+        _FakeApi(detail: _movie(synopsis: _longSynopsis)),
+        size: _wide,
+      );
+
+      expect(find.byType(ExpandableText), findsOneWidget);
+      expect(find.text('MORE'), findsOneWidget);
+
+      await tester.ensureVisible(find.text('MORE'));
+      await tester.tap(find.text('MORE'));
+      await tester.pumpAndSettle();
+
+      final dialog = find.byType(ExpandableTextDialog);
+      expect(dialog, findsOneWidget);
+      expect(
+        find.descendant(of: dialog, matching: find.text(_longSynopsis)),
+        findsOneWidget,
+      );
+      expect(find.byTooltip('关闭'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('宽屏短简介同样走 ExpandableText，不出现 MORE', (tester) async {
+      await _pumpDetail(tester, _FakeApi(detail: _movie()), size: _wide);
+
+      expect(find.byType(ExpandableText), findsOneWidget);
+      expect(find.text('MORE'), findsNothing);
+      expect(find.text('短简介'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
   });
 
   group('DETAIL-04 / PLAY-05 无片源（宽 / 窄屏）', () {
