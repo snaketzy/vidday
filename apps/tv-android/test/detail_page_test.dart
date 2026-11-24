@@ -698,7 +698,7 @@ void main() {
   });
 
   group('AU-04 片名分层', () {
-    testWidgets('宽屏：英中都有时英文在上（大字号）、中文在下（小一号）', (tester) async {
+    testWidgets('宽屏：英中都有时中文在上（大字号）、英文在下（小一号）', (tester) async {
       await _pumpDetail(
         tester,
         _FakeApi(detail: _movie(englishTitle: 'Test Movie')),
@@ -711,21 +711,21 @@ void main() {
       expect(en, findsOneWidget);
       expect(zh, findsOneWidget);
 
-      // 英文在上、中文在下。
+      // 中文在上、英文在下。
       expect(
-        tester.getTopLeft(en).dy,
-        lessThan(tester.getTopLeft(zh).dy),
+        tester.getTopLeft(zh).dy,
+        lessThan(tester.getTopLeft(en).dy),
       );
-      // 宽屏字号：英文 30、中文 24，中文更小。
+      // 宽屏字号：中文 30、英文 24，中文更大。
       final enSize = tester.widget<Text>(en).style!.fontSize;
       final zhSize = tester.widget<Text>(zh).style!.fontSize;
-      expect(enSize, 30);
-      expect(zhSize, 24);
-      expect(zhSize, lessThan(enSize!));
+      expect(zhSize, 30);
+      expect(enSize, 24);
+      expect(zhSize, greaterThan(enSize!));
       // 宽屏仍左对齐。
       expect(
-        tester.getTopLeft(en).dx,
-        closeTo(tester.getTopLeft(zh).dx, 0.5),
+        tester.getTopLeft(zh).dx,
+        closeTo(tester.getTopLeft(en).dx, 0.5),
       );
     });
 
@@ -782,7 +782,7 @@ void main() {
       expect(tester.widget<Text>(fallback).style!.fontSize, 30);
     });
 
-    testWidgets('竖屏：英文在上、中文在下且更小，片名仍居中', (tester) async {
+    testWidgets('竖屏：中文在上（大字号）、英文在下（小一号），片名仍居中', (tester) async {
       await _pumpDetail(
         tester,
         _FakeApi(detail: _movie(englishTitle: 'Test Movie')),
@@ -796,18 +796,18 @@ void main() {
       expect(en, findsOneWidget);
       expect(zh, findsOneWidget);
       expect(
-        tester.getTopLeft(en).dy,
-        lessThan(tester.getTopLeft(zh).dy),
+        tester.getTopLeft(zh).dy,
+        lessThan(tester.getTopLeft(en).dy),
       );
-      // 竖屏字号：英文 (46*unit)、中文 (36*unit)，unit=1.0。
+      // 竖屏字号：中文 (46*unit)、英文 (36*unit)，unit=1.0。
       final enSize = tester.widget<Text>(en).style!.fontSize;
       final zhSize = tester.widget<Text>(zh).style!.fontSize;
-      expect(enSize, closeTo(46, 0.01));
-      expect(zhSize, closeTo(36, 0.01));
-      expect(zhSize, lessThan(enSize!));
+      expect(zhSize, closeTo(46, 0.01));
+      expect(enSize, closeTo(36, 0.01));
+      expect(zhSize, greaterThan(enSize!));
       // 仍居中。
-      expect(tester.getCenter(en).dx, closeTo(227, 1));
       expect(tester.getCenter(zh).dx, closeTo(227, 1));
+      expect(tester.getCenter(en).dx, closeTo(227, 1));
     });
   });
 
