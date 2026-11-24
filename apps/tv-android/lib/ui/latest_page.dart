@@ -24,7 +24,11 @@ class _LatestPageState extends State<LatestPage> {
   Future<List<CarouselCard>> _load() =>
       widget.api.fetchLatest(days: _days, limit: null);
 
-  void _reload() => setState(() => _future = _load());
+  void _reload() {
+    setState(() {
+      _future = _load();
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
