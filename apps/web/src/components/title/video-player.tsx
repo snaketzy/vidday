@@ -4,9 +4,7 @@ import { PgsRenderer } from 'libpgs'
 import pgsWorkerUrl from 'libpgs/dist/libpgs.worker.js?url'
 import {
   ArrowLeft,
-  Captions,
   Film,
-  Languages,
   Maximize,
   Minimize,
   Pause,
@@ -15,7 +13,6 @@ import {
   Play,
   RotateCcw,
   RotateCw,
-  Settings,
   SkipBack,
   SkipForward,
   Volume1,
@@ -23,22 +20,13 @@ import {
   VolumeX,
   X,
 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
 import { cn } from 'cn'
+import { Popover } from 'radix-ui'
 import { useNavigate } from 'react-router'
 
+import { PlaybackSettings, PlaybackTimeline, type ThumbnailIndex } from '@/components/title/playback-controls'
 import { Button } from '@/components/ui/button'
-import {
-  DropdownMenu,
-  DropdownMenuCheckboxItem,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
 import { Slider } from '@/components/ui/slider'
 import { formatTime } from '@/lib/format'
 import { QoeTracker } from '@/lib/qoe'
@@ -90,8 +78,6 @@ const SEEK_STEP = 10
 const SEEK_OSD_TIMEOUT = 900
 /** 播放 / 暂停中央图标闪现的停留时长 */
 const PLAYBACK_OSD_TIMEOUT = 700
-/** 方向键统一由播放器全局接管，可聚焦控件（如进度条）不再做自身步进 */
-const ARROW_KEYS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'])
 
 /**
  * 外挂 PGS 字幕：远端在与 master 同级的 `pgs-subs/` 下放一份 index.json 清单。
@@ -108,8 +94,6 @@ const PGS_KEY_PREFIX = 'pgs:'
  * 该资源缺失属正常情况（存量片没重编），悬停退化为纯时间提示。
  */
 const THUMBNAIL_INDEX_PATH = 'thumbnails/index.json'
-/** 取不到缩略图时，悬停时间气泡的半宽（px），仅用于贴边夹取定位 */
-const HOVER_CHIP_HALF_WIDTH = 20
 
 /**
  * 断流退避重试参数。
@@ -146,6 +130,7 @@ const PRIME_POLL_MS = 100
 
 const controlClass = 'text-white hover:bg-white/15 focus-visible:ring-white/40'
 const menuClass = 'z-100 border-white/10 bg-[#181818] text-white'
+const compactControlClass = cn(controlClass, 'size-7 sm:size-9')
 
 /** 由轨道高度推导展示名 */
 const heightLabel = (height: number) => (height >= 2160 ? '4K' : `${height}p`)
@@ -413,22 +398,6 @@ function toPgsTrackOptions(data: unknown, indexUrl: string): MediaTrackOption[] 
   })
 }
 
-/**
- * `thumbnails/index.json` 的结构：一组规格相同的雪碧图。
- * count 是总格数，第 i 格落在第 floor(i / (columns*rows)) 张图的第 i % (columns*rows) 格（行优先）。
- */
-interface ThumbnailIndex {
-  width: number
-  height: number
-  columns: number
-  rows: number
-  count: number
-  duration: number
-  files: string[]
-  /** 索引文件自身地址：每张雪碧图按相对路径解析到它所在目录 */
-  indexUrl: string
-}
-
 const positiveNumber = (value: unknown): number | null =>
   typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null
 
@@ -622,17 +591,14 @@ export function VideoPlayer({ title, episode, dormant = false, closePipToken = 0
   /** 快进 / 快退状态层：按左右键时短暂显示目标时间 */
   const [seekOsd, setSeekOsd] = useState<{ forward: boolean; target: number } | null>(null)
   const seekOsdTimer = useRef<number | undefined>(undefined)
-  /**
-   * 进度条悬停定位：null 表示未悬停，否则记录鼠标在轨道内的比例（0-1）、
-   * 对应时间，以及轨道宽度（用于把预览浮层夹在轨道内，不溢出左右时间标签）。
-   */
-  const [seekHover, setSeekHover] = useState<{ ratio: number; time: number; barWidth: number } | null>(null)
+  const [controlMenuOpen, setControlMenuOpen] = useState(false)
+  const [controlsHovered, setControlsHovered] = useState(false)
+  const [timelineDragging, setTimelineDragging] = useState(false)
   /** 画中画状态：由 video 的 enter/leavepictureinpicture 事件回写 store，用于按钮高亮、
    *  并让常驻播放层知道「离开播放页后仍需保留播放器」 */
   const pipActive = player.pictureInPicture
-  const seekBarRef = useRef<HTMLDivElement>(null)
   /** 悬停预览缩略图索引；片子没生成 thumbnails/ 时为 null，浮层退化只显示时间 */
-  const [thumbIndex, setThumbIndex] = useState<ThumbnailIndex | null>(null)
+  const [thumbnails, setThumbnails] = useState<{ sourceUrl: string; index: ThumbnailIndex } | null>(null)
   /** 当前是否由键盘驱动：为真时键盘操作不主动唤出控制栏，鼠标一动即恢复指针驱动 */
   const keyboardDrivenRef = useRef(false)
   const setContainerRef = useCallback((element: HTMLDivElement | null) => {
@@ -687,8 +653,16 @@ export function VideoPlayer({ title, episode, dormant = false, closePipToken = 0
   useEffect(() => {
     const record = progressRef.current.find((item) => item.titleId === title.id)
     const sameEpisode = record ? (record.episodeId ?? null) === (episode?.id ?? null) : false
-    const resumeRatio =
+    let resumeRatio =
       record && sameEpisode && record.duration > 0 ? Math.min(record.position / record.duration, 1) : 0
+    if (title.type === 'movie') {
+      // Keep movie eligibility aligned with WEB-02's resumableMovieRecord.
+      const canResume = record && sameEpisode && (record.episodeId ?? null) === null
+        && Number.isFinite(record.position) && Number.isFinite(record.duration)
+        && record.position >= 1 && record.position < record.duration
+        && record.percent < 98 && resumeRatio < 0.98
+      if (!canResume) resumeRatio = 0
+    }
     resumeRef.current = resumeRatio
     dispatch(
       loadSession({
@@ -715,7 +689,7 @@ export function VideoPlayer({ title, episode, dormant = false, closePipToken = 0
       }
       dispatch(endSession())
     }
-  }, [dispatch, title.id, episode?.id, nominalDuration])
+  }, [dispatch, title.id, title.type, episode?.id, nominalDuration])
 
   /* 观看进度落库：播放中每 15s 上报一次，暂停 / 播完 / 离开页面立即上报。
      服务端按 updatedAt 幂等 upsert，重复上报不会覆盖更新的记录。 */
@@ -1010,14 +984,16 @@ export function VideoPlayer({ title, episode, dormant = false, closePipToken = 0
 
   /* 悬停预览缩略图：约定与 master 同级，存量片没有这份索引，缺失即退化 */
   useEffect(() => {
-    // 换片先清空，避免同一个组件实例把上一部的雪碧图用到新片上
-    setThumbIndex(null)
     const indexUrl = new URL(THUMBNAIL_INDEX_PATH, sourceUrl).href
     const controller = new AbortController()
     // 同 master：固定路径的覆盖式上传，必须每次回源校验，否则重传后索引不更新
     fetch(indexUrl, { signal: controller.signal, cache: 'no-cache' })
       .then((response) => (response.ok ? response.json() : null))
-      .then((data) => setThumbIndex(toThumbnailIndex(data, indexUrl)))
+      .then((data) => {
+        if (controller.signal.aborted) return
+        const index = toThumbnailIndex(data, indexUrl)
+        setThumbnails(index ? { sourceUrl, index } : null)
+      })
       .catch(() => undefined)
     return () => controller.abort()
   }, [sourceUrl])
@@ -1443,9 +1419,8 @@ export function VideoPlayer({ title, episode, dormant = false, closePipToken = 0
 
   const toggleFullscreen = useCallback(() => {
     const el = containerRef.current
-    if (!el) return
-    if (document.fullscreenElement) void document.exitFullscreen()
-    else void el.requestFullscreen?.()
+    if (document.fullscreenElement) void document.exitFullscreen().catch(() => undefined)
+    else if (document.fullscreenEnabled) void el?.requestFullscreen?.().catch(() => undefined)
   }, [])
 
   /** 站内「关闭画中画」入口：标记为站内发起后退出小窗，避免被误判成「返回标签页」而跳转 */
@@ -1550,52 +1525,6 @@ export function VideoPlayer({ title, episode, dormant = false, closePipToken = 0
     seekOsdTimer.current = window.setTimeout(() => setSeekOsd(null), SEEK_OSD_TIMEOUT)
   }, [])
 
-  /** 悬停进度条：按鼠标 X 位置换算目标时间，供悬浮预览层展示 */
-  const handleSeekHover = (event: MouseEvent<HTMLDivElement>) => {
-    const element = seekBarRef.current
-    const duration = player.duration
-    if (!element || !duration) return
-    const rect = element.getBoundingClientRect()
-    if (!rect.width) return
-    const ratio = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width))
-    setSeekHover({ ratio, time: ratio * duration, barWidth: rect.width })
-  }
-
-  /**
-   * 悬停预览层的最终定位与雪碧图取格：
-   * 时间 → 第 i 格 → 第几张图的哪一行哪一列，全部由 index.json 的规格推导。
-   * 没有索引（老片源 / 请求失败）时只算定位，浮层退化成纯时间气泡。
-   */
-  const seekHoverLayer = useMemo(() => {
-    if (!seekHover) return null
-    const half = thumbIndex ? thumbIndex.width / 2 : HOVER_CHIP_HALF_WIDTH
-    // 贴边时把浮层夹在轨道内，否则会压到左右两侧的时间标签上
-    const left = seekHover.barWidth > half * 2
-      ? Math.min(seekHover.barWidth - half, Math.max(half, seekHover.ratio * seekHover.barWidth))
-      : seekHover.barWidth / 2
-
-    if (!thumbIndex) return { left, cell: null }
-
-    const { count, columns, rows, width, height, duration, files, indexUrl } = thumbIndex
-    // 时间归一化后乘总格数：索引里的 count 与 duration 同源，比按秒数取整更稳
-    const rawIndex = Math.floor((seekHover.time / duration) * count)
-    const index = Math.min(count - 1, Math.max(0, rawIndex))
-    const perSheet = columns * rows
-    const file = files[Math.min(files.length - 1, Math.floor(index / perSheet))]
-    if (!file) return { left, cell: null }
-    const cell = index % perSheet
-    return {
-      left,
-      cell: {
-        width,
-        height,
-        backgroundImage: `url(${new URL(file, indexUrl).href})`,
-        backgroundSize: `${columns * width}px ${rows * height}px`,
-        backgroundPosition: `-${(cell % columns) * width}px -${Math.floor(cell / columns) * height}px`,
-      },
-    }
-  }, [seekHover, thumbIndex])
-
   const wake = useCallback(() => {
     // 键盘驱动期间不主动显示控制栏，但仍维持自动隐藏计时，避免控件卡在屏上
     if (!keyboardDrivenRef.current) dispatch(setControlsVisible(true))
@@ -1610,10 +1539,13 @@ export function VideoPlayer({ title, episode, dormant = false, closePipToken = 0
     wake()
   }, [wake])
 
-  /** 焦点落在菜单触发器上时，方向键仍交给播放器全局快捷键，别让 Radix 抢去打开菜单。 */
-  const preventArrowTriggerOpen = useCallback((event: ReactKeyboardEvent<HTMLElement>) => {
-    if (ARROW_KEYS.has(event.key)) event.preventDefault()
-  }, [])
+  const showPlaybackControls = !dormant && !adActive && !player.ended
+
+  useEffect(() => {
+    setTimelineDragging(false)
+    setControlMenuOpen(false)
+    if (!showPlaybackControls) setControlsHovered(false)
+  }, [showPlaybackControls, sourceUrl, title.id, episode?.id])
 
   useEffect(() => {
     wake()
@@ -1734,9 +1666,11 @@ export function VideoPlayer({ title, episode, dormant = false, closePipToken = 0
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       // 隐藏态（画中画期间浏览其他页面）：播放器不参与前台按键响应
-      if (dormantRef.current) return
+      if (dormantRef.current || event.defaultPrevented || controlMenuOpen) return
       const target = event.target as HTMLElement | null
-      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return
+      if (target?.closest('input, textarea, [role="menu"]')) return
+      if ((event.key === ' ' || event.key === 'Enter') && target?.closest('button, a[href]')) return
+      if (timelineDragging && event.key !== 'Tab') return
       // 进入键盘驱动模式：后续键盘操作不再主动弹出控制栏（鼠标一动即退出该模式）
       keyboardDrivenRef.current = true
       if (event.key === 'Escape' && contextMenu) {
@@ -1797,7 +1731,7 @@ export function VideoPlayer({ title, episode, dormant = false, closePipToken = 0
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [adjustVolume, closeContextMenu, contextMenu, dispatch, navigate, seekRelative, showSeekOsd, statsVisible, toggleFullscreen, togglePlayback, wake])
+  }, [adjustVolume, closeContextMenu, contextMenu, controlMenuOpen, dispatch, navigate, seekRelative, showSeekOsd, statsVisible, timelineDragging, toggleFullscreen, togglePlayback, wake])
 
   /* 播放结束：自动播放下一集 */
   useEffect(() => {
@@ -1807,24 +1741,24 @@ export function VideoPlayer({ title, episode, dormant = false, closePipToken = 0
 
   const VolumeIcon =
     player.muted || player.volume === 0 ? VolumeX : player.volume < 0.5 ? Volume1 : Volume2
+  const controlsVisible = player.controlsVisible || controlsHovered || timelineDragging || controlMenuOpen
   /** 控制栏隐藏时同步隐藏鼠标指针（仅播放中，且非广告 / 结束遮罩态） */
-  const hideCursor = !player.controlsVisible && player.isPlaying && !player.ended && !adActive
+  const hideCursor = !controlsVisible && player.isPlaying && showPlaybackControls
   /** 画面中央播放控件（播放/暂停 + ±10 秒）是否可见，与光标手型保持同步 */
   const centerControlsVisible =
     player.controlsVisible && !player.buffering && !player.ended && !adActive && !primeState
   /** 浏览器是否支持画中画：不支持时隐藏按钮（Safari 走原生 webkit 行为，这里不做兜底） */
-  const pipSupported = typeof document !== 'undefined' && document.pictureInPictureEnabled
+  const pipSupported = document.pictureInPictureEnabled && typeof videoRef.current?.requestPictureInPicture === 'function'
+  const fullscreenSupported = document.fullscreenEnabled && typeof containerRef.current?.requestFullscreen === 'function'
   const episodeLabel = episode ? `第 ${episode.season} 季 第 ${episode.number} 集 · ${episode.title}` : null
   const autoSuffix =
     player.quality === 'auto' && liveHeight ? `（当前 ${heightLabel(liveHeight)}）` : ''
-  const subtitleLabel = [...player.subtitleTracks, ...player.pgsTracks].find(
-    (track) => track.key === player.subtitle,
-  )?.label
-  const audioLabel = player.audioTracks.find((track) => track.key === player.audio)?.label
+  const controlsKey = `${title.id}:${episode?.id ?? ''}:${sourceUrl}`
 
   return (
     <div
       ref={setContainerRef}
+      inert={dormant}
       className={cn(
         'relative h-screen w-screen select-none overflow-hidden bg-black text-white',
         hideCursor ? 'cursor-none' : 'cursor-default',
@@ -1850,7 +1784,7 @@ export function VideoPlayer({ title, episode, dormant = false, closePipToken = 0
       <button
         type="button"
         aria-label={player.isPlaying ? '暂停' : '播放'}
-        className={cn('absolute inset-0 z-60 outline-none', hideCursor ? 'cursor-none' : 'cursor-default')}
+        className={cn('absolute inset-0 z-60 outline-none focus-visible:outline-2 focus-visible:-outline-offset-4 focus-visible:outline-white', hideCursor ? 'cursor-none' : 'cursor-default')}
         onClick={() => {
           togglePlayback()
           wake()
@@ -1859,8 +1793,9 @@ export function VideoPlayer({ title, episode, dormant = false, closePipToken = 0
 
       {/* 悬停状态图标层：中央为播放/暂停，两侧为 ±10 秒快退/快进 */}
       <div
+        inert={!centerControlsVisible}
         className={cn(
-          'pointer-events-none absolute inset-0 z-70 flex items-center justify-center gap-8 transition-opacity duration-200 md:gap-14',
+          'pointer-events-none absolute inset-0 z-70 flex items-center justify-center gap-8 transition-opacity duration-200 md:hidden',
           centerControlsVisible ? 'opacity-100' : 'opacity-0',
         )}
       >
@@ -1990,7 +1925,7 @@ export function VideoPlayer({ title, episode, dormant = false, closePipToken = 0
       {/* 音量调整状态层：按上下键调整音量时短暂显示 */}
       {volumeOsd !== null ? (
         <div className="pointer-events-none absolute inset-x-0 top-16 z-90 flex justify-center md:top-20">
-          <div className="flex items-center gap-3 rounded-full bg-black/70 px-4 py-2 text-white backdrop-blur">
+          <div className="flex items-center gap-3 rounded-full bg-black/45 px-4 py-2 text-white backdrop-blur-xl backdrop-saturate-150">
             {volumeOsd === 0 ? (
               <VolumeX className="size-5" />
             ) : volumeOsd < 0.5 ? (
@@ -2020,7 +1955,7 @@ export function VideoPlayer({ title, episode, dormant = false, closePipToken = 0
           aria-hidden="true"
           className="pointer-events-none absolute inset-0 z-90 flex items-center justify-center"
         >
-          <span className="flex size-20 items-center justify-center rounded-full bg-black/55 text-white backdrop-blur-sm md:size-24">
+          <span className="flex size-20 items-center justify-center rounded-full bg-black/45 text-white backdrop-blur-xl backdrop-saturate-150 md:size-24">
             {playbackOsd === 'pause' ? (
               <Pause className="size-9 fill-current" />
             ) : (
@@ -2036,7 +1971,7 @@ export function VideoPlayer({ title, episode, dormant = false, closePipToken = 0
           aria-hidden="true"
           className="pointer-events-none absolute inset-0 z-90 flex items-center justify-center"
         >
-          <div className="flex flex-col items-center gap-2 rounded-2xl bg-black/60 px-7 py-4 text-white backdrop-blur">
+          <div className="flex flex-col items-center gap-2 rounded-2xl bg-black/45 px-7 py-4 text-white backdrop-blur-xl backdrop-saturate-150">
             {seekOsd.forward ? <RotateCw className="size-7" /> : <RotateCcw className="size-7" />}
             <span className="text-lg font-semibold tabular-nums">{formatTime(seekOsd.target)}</span>
             <span className="text-[11px] text-white/70">{`${seekOsd.forward ? '+' : '-'}${SEEK_STEP} 秒`}</span>
@@ -2049,32 +1984,38 @@ export function VideoPlayer({ title, episode, dormant = false, closePipToken = 0
       {/* 顶部信息栏 */}
       <div
         className={cn(
-          'app-window-drag absolute inset-x-0 top-0 z-80 flex items-center gap-3 bg-gradient-to-b from-black/85 to-transparent p-4 transition-opacity duration-300 md:p-6',
-          player.controlsVisible ? 'opacity-100' : 'pointer-events-none opacity-0',
+          'app-window-drag absolute inset-x-0 top-0 z-80 transition-opacity duration-300',
+          controlsVisible ? 'opacity-100' : 'pointer-events-none opacity-0 focus-within:pointer-events-auto focus-within:opacity-100',
         )}
       >
-        <Button
-          size="icon"
-          variant="ghost"
-          aria-label="返回"
-          className={cn(controlClass, 'app-window-no-drag')}
-          onClick={() => navigate(-1)}
-        >
-          <ArrowLeft className="size-5" />
-        </Button>
-        <div className="min-w-0">
-          <p className="truncate text-sm font-semibold md:text-base">{title.name}</p>
-          {episodeLabel ? <p className="truncate text-xs text-white/60">{episodeLabel}</p> : null}
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 bg-black/45 backdrop-blur-xl backdrop-saturate-150 [-webkit-mask-image:linear-gradient(to_bottom,black_60%,transparent)] [mask-image:linear-gradient(to_bottom,black_60%,transparent)]"
+        />
+        <div className="relative flex items-center gap-3 p-4 md:p-6">
+          <Button
+            size="icon"
+            variant="ghost"
+            aria-label="返回"
+            className={cn(controlClass, 'app-window-no-drag')}
+            onClick={() => navigate(-1)}
+          >
+            <ArrowLeft className="size-5" />
+          </Button>
+          <div className="min-w-0">
+            <p className="truncate text-sm font-semibold md:text-base">{title.name}</p>
+            {episodeLabel ? <p className="truncate text-xs text-white/60">{episodeLabel}</p> : null}
+          </div>
+          <Button
+            size="icon"
+            variant="ghost"
+            aria-label="返回作品详情"
+            className={cn(controlClass, 'app-window-no-drag ml-auto')}
+            onClick={() => navigate(`/title/${title.id}`)}
+          >
+            <X className="size-5" />
+          </Button>
         </div>
-        <Button
-          size="icon"
-          variant="ghost"
-          aria-label="返回作品详情"
-          className={cn(controlClass, 'app-window-no-drag ml-auto')}
-          onClick={() => navigate(`/title/${title.id}`)}
-        >
-          <X className="size-5" />
-        </Button>
       </div>
 
       {/* 播放结束遮罩 */}
@@ -2108,7 +2049,7 @@ export function VideoPlayer({ title, episode, dormant = false, closePipToken = 0
 
       {/* Stats for nerds：类似 YouTube 的实时播放诊断浮层（仅开发环境） */}
       {STATS_FOR_NERDS_ENABLED && statsVisible ? (
-        <section className="absolute left-4 top-4 z-90 max-w-[min(760px,calc(100vw-2rem))] rounded-2xl bg-[rgba(33,33,33,0.82)] px-5 py-4 text-[15px] leading-7 shadow-[0_18px_60px_rgba(0,0,0,0.45)] backdrop-blur md:left-6 md:top-6">
+        <section className="absolute left-4 top-4 z-90 max-w-[min(760px,calc(100vw-2rem))] rounded-2xl bg-black/45 px-5 py-4 text-[15px] leading-7 shadow-[0_18px_60px_rgba(0,0,0,0.45)] backdrop-blur-xl backdrop-saturate-150 md:left-6 md:top-6">
           <button
             type="button"
             aria-label="关闭播放统计"
@@ -2152,318 +2093,153 @@ export function VideoPlayer({ title, episode, dormant = false, closePipToken = 0
         </section>
       ) : null}
 
-      {/* 底部控制栏 */}
-      <div
-        className={cn(
-          'absolute inset-x-0 bottom-0 z-80 flex flex-col gap-2 bg-gradient-to-t from-black/90 via-black/70 to-transparent px-4 pb-5 pt-16 transition-opacity duration-300 md:px-6',
-          player.controlsVisible ? 'opacity-100' : 'pointer-events-none opacity-0',
-        )}
-      >
-        <div className="flex items-center gap-3">
-          <span className="w-14 shrink-0 text-right text-xs tabular-nums text-white/75">
-            {formatTime(player.position)}
-          </span>
-          <div
-            ref={seekBarRef}
-            className="relative min-w-0 flex-1"
-            onMouseMove={handleSeekHover}
-            onMouseLeave={() => setSeekHover(null)}
-          >
-            <Slider
-              value={[player.position]}
-              buffered={buffered}
-              min={0}
-              max={player.duration || 1}
-              step={1}
-              aria-label="播放进度"
-              onValueChange={(value) => seekTo(value[0] ?? 0)}
-              /*
-               * 拖动进度条后滑块会持有焦点，此时 Radix Slider 会把方向键当作进度步进：
-               * 上下键会抢走播放器的音量快捷键，左右键还会与全局 ±10s 叠加成双重跳转。
-               * 拦掉默认行为，方向键统一交给播放器的全局快捷键处理。
-               */
-              onKeyDown={(event) => {
-                if (ARROW_KEYS.has(event.key)) event.preventDefault()
-              }}
-              /*
-               * 对齐奈飞 / YouTube 的悬停反馈：轨道由 4px 涨到 8px、滑块 12px 放大到 16px，
-               * 光标保持默认箭头，用尺寸变化 + 悬浮时间层表达「可拖到此处」。
-               * h-4 固定命中区高度，避免悬停放大时整条控制栏上下抖动。
-               */
-              className="h-4 [&_[data-slot=slider-buffered]]:bg-[#a31621] [&_[data-slot=slider-range]]:bg-brand [&_[data-slot=slider-thumb]]:size-3 [&_[data-slot=slider-thumb]]:border-0 [&_[data-slot=slider-thumb]]:bg-brand [&_[data-slot=slider-thumb]]:transition-all [&_[data-slot=slider-track]]:h-1 [&_[data-slot=slider-track]]:bg-white/20 [&_[data-slot=slider-track]]:transition-all hover:[&_[data-slot=slider-thumb]]:size-4 hover:[&_[data-slot=slider-track]]:h-2"
-            />
-            {seekHover && seekHoverLayer ? (
-              <div
-                className="pointer-events-none absolute bottom-full z-10 mb-2 flex -translate-x-1/2 flex-col items-center gap-1"
-                style={{ left: `${seekHoverLayer.left}px` }}
+      {showPlaybackControls ? (
+        <div
+          key={controlsKey}
+          className={cn(
+            'absolute bottom-10 left-1/2 z-80 flex w-[calc(100%-1rem)] max-w-3xl -translate-x-1/2 flex-col gap-1.5 rounded-xl border border-white/15 bg-black/45 px-2 py-2 shadow-xl backdrop-blur-xl backdrop-saturate-150 transition-opacity duration-300 sm:gap-2 sm:px-4',
+            controlsVisible ? 'opacity-100' : 'pointer-events-none opacity-0 has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:opacity-100',
+          )}
+          onMouseEnter={() => setControlsHovered(true)}
+          onMouseLeave={() => setControlsHovered(false)}
+        >
+          <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
+            <div className="flex min-w-0 items-center">
+              <Popover.Root onOpenChange={setControlMenuOpen}>
+                <Popover.Trigger asChild>
+                  <Button size="icon" variant="ghost" aria-label="音量" className={compactControlClass}>
+                    <VolumeIcon className="size-5" />
+                  </Button>
+                </Popover.Trigger>
+                <Popover.Portal container={menuPortalContainer ?? undefined}>
+                  <Popover.Content
+                    side="top"
+                    align="start"
+                    sideOffset={8}
+                    aria-label="音量"
+                    className={cn(menuClass, 'w-44 rounded-md border p-2 shadow-lg')}
+                  >
+                    <Button variant="ghost" className={cn(controlClass, 'w-full justify-start')} onClick={() => dispatch(toggleMute())}>
+                      <VolumeIcon className="size-4" />
+                      {player.muted ? '取消静音' : '静音'}
+                    </Button>
+                    <div className="space-y-2 px-2 py-1.5">
+                      <div className="flex items-center justify-between text-xs text-white/75">
+                        <span>音量</span>
+                        <span>{player.muted ? 0 : Math.round(player.volume * 100)}%</span>
+                      </div>
+                      <Slider
+                        value={[player.muted ? 0 : Math.round(player.volume * 100)]}
+                        aria-label="音量"
+                        onValueChange={(value) => dispatch(setVolume((value[0] ?? 0) / 100))}
+                        className="[&_[data-slot=slider-range]]:bg-white [&_[data-slot=slider-track]]:bg-white/30"
+                      />
+                    </div>
+                  </Popover.Content>
+                </Popover.Portal>
+              </Popover.Root>
+              {episode ? (
+                <>
+                  <Button size="icon" variant="ghost" aria-label="上一集" disabled={!prevEpisode} className={compactControlClass} onClick={() => prevEpisode && navigate(`/watch/${title.id}/${prevEpisode.id}`)}>
+                    <SkipBack className="size-4" />
+                  </Button>
+                  <Button size="icon" variant="ghost" aria-label="下一集" disabled={!nextEpisode} className={compactControlClass} onClick={() => nextEpisode && navigate(`/watch/${title.id}/${nextEpisode.id}`)}>
+                    <SkipForward className="size-4" />
+                  </Button>
+                </>
+              ) : null}
+              {title.seasons.length ? (
+                <Button size="icon" variant="ghost" aria-label="选集" aria-expanded={episodesOpen} className={compactControlClass} onClick={() => setEpisodesOpen((open) => !open)}>
+                  <Film className="size-4" />
+                </Button>
+              ) : null}
+              {nextEpisode && player.autoplayNext ? (
+                <p className="ml-2 hidden min-w-0 truncate text-xs text-white/75 lg:block">
+                  即将播放：{`第 ${nextEpisode.season} 季 第 ${nextEpisode.number} 集 · ${nextEpisode.title}`}
+                </p>
+              ) : null}
+            </div>
+
+            <div className="flex items-center justify-center sm:gap-2">
+              <Button size="icon" variant="ghost" aria-label="后退 10 秒" className={compactControlClass} onClick={() => { seekRelative(-SEEK_STEP); wake() }}>
+                <RotateCcw className="size-4 sm:size-5" />
+              </Button>
+              <Button
+                size="icon"
+                aria-label={player.isPlaying ? '暂停' : '播放'}
+                className="size-8 rounded-full bg-white text-black hover:bg-white/85 focus-visible:ring-white/60 sm:size-10"
+                onClick={() => { togglePlayback(); wake() }}
               >
-                {seekHoverLayer.cell ? (
-                  /* 雪碧图按格定位：外层定死 size，背景用负偏移把目标格挪进视野 */
-                  <div
-                    className="rounded-sm bg-black bg-no-repeat"
-                    style={seekHoverLayer.cell}
-                  />
-                ) : null}
-                <span className="rounded bg-black/85 px-1.5 py-0.5 text-xs tabular-nums text-white">
-                  {formatTime(seekHover.time)}
-                </span>
-              </div>
-            ) : null}
+                {player.isPlaying ? <Pause className="size-5 fill-current" /> : <Play className="size-5 fill-current" />}
+              </Button>
+              <Button size="icon" variant="ghost" aria-label="前进 10 秒" className={compactControlClass} onClick={() => { seekRelative(SEEK_STEP); wake() }}>
+                <RotateCw className="size-4 sm:size-5" />
+              </Button>
+            </div>
+
+            <div className="flex min-w-0 items-center justify-end sm:gap-1">
+              <PlaybackSettings
+                groups={[
+                  {
+                    label: '字幕',
+                    value: player.subtitle,
+                    options: [{ key: SUBTITLE_OFF, label: '关闭' }, ...player.subtitleTracks],
+                    externalOptions: player.pgsTracks,
+                    onChange: (value) => dispatch(setSubtitle(value)),
+                  },
+                  {
+                    label: '音轨',
+                    value: player.audio,
+                    options: player.audioTracks,
+                    emptyLabel: player.audioTracks.length ? undefined : '暂无可选音轨',
+                    onChange: (value) => dispatch(setAudio(value)),
+                  },
+                  {
+                    label: '画质',
+                    value: player.quality,
+                    options: [{ key: 'auto', label: `自动${autoSuffix}` }, ...levels],
+                    onChange: (value) => dispatch(setQuality(value)),
+                  },
+                ]}
+                portalContainer={menuPortalContainer}
+                autoplayNext={player.autoplayNext}
+                onAutoplayNext={(checked) => dispatch(setAutoplayNext(checked))}
+                onOpenChange={setControlMenuOpen}
+              />
+              {pipSupported ? (
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  aria-label={pipActive ? '退出画中画' : '画中画'}
+                  aria-pressed={pipActive}
+                  className={cn(compactControlClass, pipActive && 'text-brand hover:text-brand')}
+                  onClick={() => { togglePictureInPicture(); wake() }}
+                >
+                  {pipActive ? <PictureInPicture2 className="size-5" /> : <PictureInPicture className="size-5" />}
+                </Button>
+              ) : null}
+              {fullscreenSupported ? (
+                <Button size="icon" variant="ghost" aria-label={player.fullscreen ? '退出全屏' : '全屏'} className={compactControlClass} onClick={toggleFullscreen}>
+                  {player.fullscreen ? <Minimize className="size-5" /> : <Maximize className="size-5" />}
+                </Button>
+              ) : null}
+            </div>
           </div>
-          <span className="w-14 shrink-0 text-xs tabular-nums text-white/55">
-            {formatTime(player.duration)}
-          </span>
+
+          <PlaybackTimeline
+            position={player.position}
+            duration={mediaReady ? player.duration : 0}
+            buffered={buffered}
+            thumbnails={thumbnails?.sourceUrl === sourceUrl ? thumbnails.index : null}
+            onSeek={seekTo}
+            onDragChange={setTimelineDragging}
+          />
         </div>
-
-        <div className="flex items-center gap-1">
-          {episode ? (
-            <>
-              <Button
-                size="icon"
-                variant="ghost"
-                aria-label="上一集"
-                disabled={!prevEpisode}
-                className={controlClass}
-                onClick={() => prevEpisode && navigate(`/watch/${title.id}/${prevEpisode.id}`)}
-              >
-                <SkipBack className="size-5" />
-              </Button>
-              <Button
-                size="icon"
-                variant="ghost"
-                aria-label="下一集"
-                disabled={!nextEpisode}
-                className={controlClass}
-                onClick={() => nextEpisode && navigate(`/watch/${title.id}/${nextEpisode.id}`)}
-              >
-                <SkipForward className="size-5" />
-              </Button>
-            </>
-          ) : null}
-
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                size="icon"
-                variant="ghost"
-                aria-label="音量"
-                className={controlClass}
-                onKeyDown={preventArrowTriggerOpen}
-              >
-                <VolumeIcon className="size-5" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent
-              align="center"
-              side="top"
-              className={cn(menuClass, 'w-44 p-2')}
-              portalContainer={menuPortalContainer}
-            >
-              <DropdownMenuItem className="cursor-pointer" onClick={() => dispatch(toggleMute())}>
-                <VolumeIcon className="size-4" />
-                {player.muted ? '取消静音' : '静音'}
-              </DropdownMenuItem>
-              <DropdownMenuSeparator className="bg-white/10" />
-              <div className="px-2 py-1.5">
-                <div className="mb-2 flex items-center justify-between text-[11px] text-white/55">
-                  <span>音量</span>
-                  <span>{`${player.muted ? 0 : Math.round(player.volume * 100)}%`}</span>
-                </div>
-                <Slider
-                  value={[player.muted ? 0 : Math.round(player.volume * 100)]}
-                  min={0}
-                  max={100}
-                  step={1}
-                  aria-label="音量"
-                  onValueChange={(value) => dispatch(setVolume((value[0] ?? 0) / 100))}
-                  className="[&_[data-slot=slider-range]]:bg-white [&_[data-slot=slider-thumb]]:size-3 [&_[data-slot=slider-thumb]]:border-0 [&_[data-slot=slider-thumb]]:bg-white [&_[data-slot=slider-track]]:h-1 [&_[data-slot=slider-track]]:bg-white/30"
-                />
-              </div>
-            </DropdownMenuContent>
-          </DropdownMenu>
-
-          {title.seasons.length ? (
-            <Button
-              variant="ghost"
-              className={cn(controlClass, 'gap-2 px-2 text-sm')}
-              onClick={() => setEpisodesOpen((open) => !open)}
-            >
-              <Film className="size-5" />
-              <span className="hidden sm:inline">选集</span>
-            </Button>
-          ) : null}
-
-          {nextEpisode && player.autoplayNext ? (
-            <p className="ml-2 hidden min-w-0 truncate text-xs text-white/55 lg:block">
-              即将播放：{`第 ${nextEpisode.season} 季 第 ${nextEpisode.number} 集 · ${nextEpisode.title}`}
-            </p>
-          ) : null}
-
-          <div className="ml-auto flex items-center gap-1">
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="ghost"
-                  aria-label="字幕"
-                  className={cn(controlClass, 'gap-2 px-2 text-sm')}
-                  onKeyDown={preventArrowTriggerOpen}
-                >
-                  <Captions className="size-5" />
-                  {subtitleLabel ? <span className="hidden text-xs sm:inline">{subtitleLabel}</span> : null}
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent
-                align="end"
-                className={menuClass}
-                portalContainer={menuPortalContainer}
-              >
-                <DropdownMenuLabel className="text-xs text-white/45">字幕</DropdownMenuLabel>
-                <DropdownMenuRadioGroup
-                  value={player.subtitle}
-                  onValueChange={(value) => dispatch(setSubtitle(value))}
-                  className="max-h-80 overflow-y-auto"
-                >
-                  <DropdownMenuRadioItem value={SUBTITLE_OFF} className="cursor-pointer">
-                    关闭
-                  </DropdownMenuRadioItem>
-                  {player.subtitleTracks.map((track) => (
-                    <DropdownMenuRadioItem key={track.key} value={track.key} className="cursor-pointer">
-                      {track.label}
-                    </DropdownMenuRadioItem>
-                  ))}
-                  {player.pgsTracks.length > 0 ? <DropdownMenuSeparator className="bg-white/10" /> : null}
-                  {player.pgsTracks.length > 0 ? (
-                    <DropdownMenuLabel className="text-xs text-white/45">外挂字幕（PGS）</DropdownMenuLabel>
-                  ) : null}
-                  {player.pgsTracks.map((track) => (
-                    <DropdownMenuRadioItem key={track.key} value={track.key} className="cursor-pointer">
-                      {track.label}
-                    </DropdownMenuRadioItem>
-                  ))}
-                </DropdownMenuRadioGroup>
-                {player.subtitleTracks.length === 0 && player.pgsTracks.length === 0 ? (
-                  <DropdownMenuItem disabled className="text-xs text-white/40">
-                    正在读取字幕信息…
-                  </DropdownMenuItem>
-                ) : null}
-              </DropdownMenuContent>
-            </DropdownMenu>
-
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="ghost"
-                  aria-label="音轨"
-                  className={cn(controlClass, 'gap-2 px-2 text-sm')}
-                  onKeyDown={preventArrowTriggerOpen}
-                >
-                  <Languages className="size-5" />
-                  {audioLabel ? <span className="hidden text-xs lg:inline">{audioLabel}</span> : null}
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent
-                align="end"
-                className={menuClass}
-                portalContainer={menuPortalContainer}
-              >
-                <DropdownMenuLabel className="text-xs text-white/45">音轨</DropdownMenuLabel>
-                <DropdownMenuRadioGroup
-                  value={player.audio}
-                  onValueChange={(value) => dispatch(setAudio(value))}
-                  className="max-h-80 overflow-y-auto"
-                >
-                  {player.audioTracks.map((track) => (
-                    <DropdownMenuRadioItem key={track.key} value={track.key} className="cursor-pointer">
-                      {track.label}
-                    </DropdownMenuRadioItem>
-                  ))}
-                </DropdownMenuRadioGroup>
-                {player.audioTracks.length === 0 ? (
-                  <DropdownMenuItem disabled className="text-xs text-white/40">
-                    正在读取音轨信息…
-                  </DropdownMenuItem>
-                ) : null}
-              </DropdownMenuContent>
-            </DropdownMenu>
-
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="ghost"
-                  aria-label="设置"
-                  className={cn(controlClass, 'px-2')}
-                  onKeyDown={preventArrowTriggerOpen}
-                >
-                  <Settings className="size-5" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent
-                align="end"
-                className={cn(menuClass, 'w-52')}
-                portalContainer={menuPortalContainer}
-              >
-                <DropdownMenuLabel className="text-xs text-white/45">画质</DropdownMenuLabel>
-                <DropdownMenuRadioGroup
-                  value={player.quality}
-                  onValueChange={(value) => dispatch(setQuality(value))}
-                >
-                  <DropdownMenuRadioItem value="auto" className="cursor-pointer">
-                    {`自动${autoSuffix}`}
-                  </DropdownMenuRadioItem>
-                  {levels.map((level) => (
-                    <DropdownMenuRadioItem key={level.key} value={level.key} className="cursor-pointer">
-                      {level.label}
-                    </DropdownMenuRadioItem>
-                  ))}
-                </DropdownMenuRadioGroup>
-                {levels.length === 0 ? (
-                  <DropdownMenuItem disabled className="text-xs text-white/40">
-                    正在读取画质信息…
-                  </DropdownMenuItem>
-                ) : null}
-                <DropdownMenuSeparator className="bg-white/10" />
-                <DropdownMenuCheckboxItem
-                  checked={player.autoplayNext}
-                  onCheckedChange={(checked) => dispatch(setAutoplayNext(Boolean(checked)))}
-                  onSelect={(event) => event.preventDefault()}
-                  className="cursor-pointer"
-                >
-                  自动播放下一集
-                </DropdownMenuCheckboxItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-
-            {pipSupported ? (
-              <Button
-                size="icon"
-                variant="ghost"
-                aria-label={pipActive ? '退出画中画' : '画中画'}
-                className={cn(controlClass, pipActive && 'text-brand hover:text-brand')}
-                onClick={() => {
-                  togglePictureInPicture()
-                  wake()
-                }}
-              >
-                {pipActive ? <PictureInPicture2 className="size-5" /> : <PictureInPicture className="size-5" />}
-              </Button>
-            ) : null}
-
-            <Button
-              size="icon"
-              variant="ghost"
-              aria-label={player.fullscreen ? '退出全屏' : '全屏'}
-              className={controlClass}
-              onClick={toggleFullscreen}
-            >
-              {player.fullscreen ? <Minimize className="size-5" /> : <Maximize className="size-5" />}
-            </Button>
-          </div>
-        </div>
-      </div>
+      ) : null}
 
       {/* 选集面板 */}
       {episodesOpen && title.seasons.length ? (
-        <aside className="absolute inset-y-0 right-0 z-90 flex w-full max-w-[360px] flex-col border-l border-white/10 bg-[#141414]/95 backdrop-blur">
+        <aside className="absolute inset-y-0 right-0 z-90 flex w-full max-w-[360px] flex-col border-l border-white/10 bg-black/45 backdrop-blur-xl backdrop-saturate-150">
           <div className="flex h-14 shrink-0 items-center gap-3 border-b border-white/10 px-4">
             <p className="text-sm font-semibold">选集</p>
             <Button
@@ -2506,7 +2282,7 @@ export function VideoPlayer({ title, episode, dormant = false, closePipToken = 0
       {/* 播放器右键菜单；刷新在所有环境可用，Stats for nerds 仅限开发环境 */}
       {contextMenu ? (
         <div
-          className="absolute z-100 min-w-48 rounded-xl border border-white/10 bg-[#1b1b1b]/95 p-1.5 shadow-[0_14px_40px_rgba(0,0,0,0.45)] backdrop-blur"
+          className="absolute z-100 min-w-48 rounded-xl border border-white/10 bg-black/45 p-1.5 shadow-[0_14px_40px_rgba(0,0,0,0.45)] backdrop-blur-xl backdrop-saturate-150"
           style={{ left: contextMenu.x, top: contextMenu.y }}
           onPointerDown={(event) => event.stopPropagation()}
         >
