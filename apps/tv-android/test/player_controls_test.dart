@@ -695,7 +695,7 @@ void main() {
     });
   }
 
-  testWidgets('音量弹层含静音按钮 / 音量标签 / 百分比与滑块', (tester) async {
+  testWidgets('音量弹层为紧凑单行：静音按钮 / 滑块 / 百分比，高度 ≤92dp', (tester) async {
     final channels = _PlayerChannels()..install();
     await _pumpPlayer(
       tester,
@@ -708,23 +708,41 @@ void main() {
     );
     await _openVolumeSheet(tester);
 
-    // ①静音按钮（带音量图标，未静音时显示「静音」）
-    expect(find.text('静音'), findsOneWidget);
+    // 单行三元素：图标按钮（未静音时 tooltip 为「静音」）/ 滑块 / 百分比读数。
+    final muteButton = find.byTooltip('静音');
+    expect(muteButton, findsOneWidget);
     expect(
-      find.descendant(
-        of: find.byType(ListTile),
-        matching: find.byIcon(Icons.volume_up),
-      ),
+      find.descendant(of: muteButton, matching: find.byIcon(Icons.volume_up)),
       findsOneWidget,
     );
-    // ②「音量」标签 + 百分比读数
-    expect(find.text('音量'), findsOneWidget);
-    expect(find.text('50%'), findsOneWidget);
-    // ③音量滑块
     expect(find.byType(Slider), findsOneWidget);
+    expect(find.text('50%'), findsOneWidget);
+
+    // 旧三段结构（静音 ListTile 文案 / 「音量」标签行）在新结构下均不存在。
+    expect(find.text('静音'), findsNothing);
+    expect(find.text('取消静音'), findsNothing);
+    expect(find.text('音量'), findsNothing);
+
+    // 弹层内容高度压缩到 ≤92dp（实测 80dp；改造前为 200dp）。
+    expect(
+      tester.getSize(find.byKey(kPlayerVolumeSheetKey)).height,
+      lessThanOrEqualTo(92),
+    );
+
+    // 单行三元素垂直中心一致（±2dp）。
+    final double iconCenter = tester.getCenter(muteButton).dy;
+    final double sliderCenter = tester.getCenter(find.byType(Slider)).dy;
+    final double textCenter = tester.getCenter(find.text('50%')).dy;
+    expect((sliderCenter - iconCenter).abs(), lessThanOrEqualTo(2));
+    expect((textCenter - iconCenter).abs(), lessThanOrEqualTo(2));
+
+    // 图标按钮命中区 ≥48dp（触摸目标不得缩小）。
+    final Size muteSize = tester.getSize(muteButton);
+    expect(muteSize.height, greaterThanOrEqualTo(48));
+    expect(muteSize.width, greaterThanOrEqualTo(48));
   });
 
-  testWidgets('点击静音发出 setVolume(0)，文案与百分比更新为取消静音 / 0%',
+  testWidgets('点击静音发出 setVolume(0)，tooltip 与百分比更新为取消静音 / 0%',
       (tester) async {
     final channels = _PlayerChannels()..install();
     await _pumpPlayer(
@@ -738,7 +756,7 @@ void main() {
     );
     await _openVolumeSheet(tester);
 
-    await tester.tap(find.text('静音'));
+    await tester.tap(find.byTooltip('静音'));
     await tester.pump();
     // 静音 = setVolume(0)
     expect(_setVolumeCalls(channels), <double>[0]);
@@ -752,8 +770,8 @@ void main() {
     ));
     await tester.pump();
 
-    expect(find.text('取消静音'), findsOneWidget);
-    expect(find.text('静音'), findsNothing);
+    expect(find.byTooltip('取消静音'), findsOneWidget);
+    expect(find.byTooltip('静音'), findsNothing);
     expect(find.text('0%'), findsOneWidget);
     expect(find.text('80%'), findsNothing);
   });
@@ -771,7 +789,7 @@ void main() {
     );
     await _openVolumeSheet(tester);
 
-    await tester.tap(find.text('静音'));
+    await tester.tap(find.byTooltip('静音'));
     await tester.pump();
     await channels.emit(const PlayerSnapshot(
       position: Duration(seconds: 30),
@@ -781,7 +799,7 @@ void main() {
     ));
     await tester.pump();
 
-    await tester.tap(find.text('取消静音'));
+    await tester.tap(find.byTooltip('取消静音'));
     await tester.pump();
 
     expect(_setVolumeCalls(channels), <double>[0, 0.6]);
@@ -802,10 +820,10 @@ void main() {
     );
     await _openVolumeSheet(tester);
 
-    expect(find.text('取消静音'), findsOneWidget);
+    expect(find.byTooltip('取消静音'), findsOneWidget);
     expect(find.text('0%'), findsOneWidget);
 
-    await tester.tap(find.text('取消静音'));
+    await tester.tap(find.byTooltip('取消静音'));
     await tester.pump();
 
     expect(_setVolumeCalls(channels), <double>[1]);
