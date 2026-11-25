@@ -198,6 +198,25 @@
 - **写入 / 禁区：** 仅 `apps/web/src/components/title/video-player.tsx`；禁止改详情页、播放控件、共享接口、数据结构和其他工作树。
 - **验收 / 交付：** `npm run typecheck`、`npm run build`、`git diff --check`；覆盖有效记录、片尾、无效记录和剧集不变；联合验证电影详情按钮与实际起播位置。与 `WP-01` 并行，不独立合入。
 
+### AP-13｜横屏底栏贴近底边（用户指令）
+- **负责人 / 工作树 / 分支 / 模块：** Android UI 子 Agent，`viddy-android-ui` / `feature/android-ui`，AND-PLAYER；工作树 HEAD 现为 `c57ea8b223dfa9f04336c279701181478edf9d0a`，须在其之上开发。
+- **用户指令：** 「播放时，控制面板距底部太远，拉进 10px」→ 主 Agent 追问刻度后用户明确：「**横屏时，距离底部太远，离暂停按钮太近**」。故本卡**只动横屏**，且要求同时改善这两个症状。
+- **目标 / 功能（只改一个常量）：** `apps/tv-android/lib/ui/player_page.dart` 的 `_buildBottomBar`（约 751 行）：
+  ```dart
+  final double bottomGap = landscape ? 36 : (compact ? 12 : 24);
+  ```
+  横屏分支 **36 → 26dp**（即拉进 10dp）。竖屏两个分支（compact `12`、非 compact `24`）**不得改动**。
+- **预期几何（`AP-12` 的基线三段式 `Column[顶栏, Expanded(Center(中央簇)), 底栏]`，横屏 3088×1440、密度 1dp=3.75px）：**
+  - 底栏整体下移 10dp（37.5px），离屏幕物理底边由约 **52dp → 约 42dp**（其中 ~16dp 是 `SafeArea` 的系统手势区内边距，本卡不改）。
+  - 中央簇**同时下移约 5dp**（它居中于「顶栏底 → 底栏顶」的可用区，可用区加高 10dp 使中心下移 5dp），因此簇与底栏上缘的间隙由约 **14.4dp → 约 19.5dp**，缓解「离暂停按钮太近」。
+  - 底栏自身高度、`padding`（横屏 16dp）、`rowGap`（横屏 8dp）、横屏宽度 `min(屏宽 × 3/4, 768)` 一律不变；按钮行在上、时间轴在下不变。
+- **保留（不得回退）：** `AP-12` 的交互（3.2s 超时且仅播放中隐藏、暂停常驻、触摸唤出）、`AP-09` 的中央簇尺寸（播放 64dp、两侧 56dp、间距 32dp）与「底栏不重复放播放簇」、`AP-06` 的品牌色与 9 个按钮的顺序。
+- **写入 / 禁区：** `apps/tv-android/lib/ui/player_page.dart`、`apps/tv-android/test/player_controls_test.dart`。禁改其余全部文件（含 `detail_page.dart`、`person_page.dart`、`expandable_text.dart`、`widgets.dart`、`core/**`、kotlin、pubspec、Gradle）。
+- **输出 / 验收 / 交付：**
+  - `flutter test`（全量）全过；`dart analyze` 无新增告警。
+  - 测试须覆盖：**横屏**底栏的 `padding.bottom` 等于 **26**（例如断言承载底栏的 `Padding` 的 `EdgeInsets.only(bottom: 26)` 或等价可观测项）；**竖屏**仍为 `12`（compact 宽度）/ `24`（非 compact 宽度），即竖屏断言**逐字不变**；`AP-12` 既有断言（中央簇居中于可用区、两间隙相等、按钮行与时间轴的行序、9 键同一行无溢出）全部继续通过。
+  - 交付 Git Commit、变更文件清单、测试输出与未验证项；release 包与真机复验由主 Agent 负责。
+
 ## Apple 端调研（仅文档）
 
 ### IOS-PLAY-01｜iOS 播放能力与生命周期评估
