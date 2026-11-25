@@ -407,7 +407,7 @@ void main() {
 
   for (final size in <Size>[const Size(900, 420), const Size(780, 380)]) {
     final String label = '${size.width.toInt()}×${size.height.toInt()}';
-    testWidgets('横屏 $label：底栏宽度 min(w×0.75, 768)、底边距 36dp、水平居中',
+    testWidgets('横屏 $label：底栏宽度 min(w×0.75, 768)、底边距 26dp、水平居中',
         (tester) async {
       final channels = _PlayerChannels()..install();
       await _pumpPlayer(tester, channels, size: size);
@@ -416,7 +416,7 @@ void main() {
       final double expectedWidth = math.min(size.width * 0.75, 768);
       expect(panel.width, closeTo(expectedWidth, 2));
       expect(panel.center.dx, closeTo(size.width / 2, 2));
-      expect(size.height - panel.bottom, closeTo(36, 0.5));
+      expect(size.height - panel.bottom, closeTo(26, 0.5));
     });
   }
 
