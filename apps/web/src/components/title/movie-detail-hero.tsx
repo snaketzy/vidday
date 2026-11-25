@@ -87,7 +87,7 @@ export function MovieDetailHero({
       <div className="pointer-events-none absolute inset-0 -z-10 bg-gradient-to-b from-background/80 via-transparent to-background" />
       <div className="pointer-events-none absolute inset-x-0 bottom-0 -z-10 h-4/5 bg-gradient-to-t from-background from-10% via-background/85 to-transparent" />
 
-      <div className="fixed inset-x-0 top-[68px] z-30 flex h-16 items-center gap-3 bg-background/80 px-4 py-2.5 backdrop-blur-sm md:px-12">
+      <div className="fixed inset-x-0 top-[68px] z-30 flex h-16 items-center gap-3 bg-background px-4 py-2.5 md:px-12">
         <Button ref={backRef} type="button" variant="ghost" size="icon" className="size-11" aria-label="返回" onClick={onBack}>
           <ArrowLeft />
         </Button>
