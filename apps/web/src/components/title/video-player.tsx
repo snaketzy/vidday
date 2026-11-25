@@ -1984,32 +1984,38 @@ export function VideoPlayer({ title, episode, dormant = false, closePipToken = 0
       {/* 顶部信息栏 */}
       <div
         className={cn(
-          'app-window-drag absolute inset-x-0 top-0 z-80 flex items-center gap-3 bg-black/45 backdrop-blur-xl backdrop-saturate-150 p-4 transition-opacity duration-300 md:p-6',
+          'app-window-drag absolute inset-x-0 top-0 z-80 transition-opacity duration-300',
           controlsVisible ? 'opacity-100' : 'pointer-events-none opacity-0 focus-within:pointer-events-auto focus-within:opacity-100',
         )}
       >
-        <Button
-          size="icon"
-          variant="ghost"
-          aria-label="返回"
-          className={cn(controlClass, 'app-window-no-drag')}
-          onClick={() => navigate(-1)}
-        >
-          <ArrowLeft className="size-5" />
-        </Button>
-        <div className="min-w-0">
-          <p className="truncate text-sm font-semibold md:text-base">{title.name}</p>
-          {episodeLabel ? <p className="truncate text-xs text-white/60">{episodeLabel}</p> : null}
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 bg-black/45 backdrop-blur-xl backdrop-saturate-150 [-webkit-mask-image:linear-gradient(to_bottom,black_60%,transparent)] [mask-image:linear-gradient(to_bottom,black_60%,transparent)]"
+        />
+        <div className="relative flex items-center gap-3 p-4 md:p-6">
+          <Button
+            size="icon"
+            variant="ghost"
+            aria-label="返回"
+            className={cn(controlClass, 'app-window-no-drag')}
+            onClick={() => navigate(-1)}
+          >
+            <ArrowLeft className="size-5" />
+          </Button>
+          <div className="min-w-0">
+            <p className="truncate text-sm font-semibold md:text-base">{title.name}</p>
+            {episodeLabel ? <p className="truncate text-xs text-white/60">{episodeLabel}</p> : null}
+          </div>
+          <Button
+            size="icon"
+            variant="ghost"
+            aria-label="返回作品详情"
+            className={cn(controlClass, 'app-window-no-drag ml-auto')}
+            onClick={() => navigate(`/title/${title.id}`)}
+          >
+            <X className="size-5" />
+          </Button>
         </div>
-        <Button
-          size="icon"
-          variant="ghost"
-          aria-label="返回作品详情"
-          className={cn(controlClass, 'app-window-no-drag ml-auto')}
-          onClick={() => navigate(`/title/${title.id}`)}
-        >
-          <X className="size-5" />
-        </Button>
       </div>
 
       {/* 播放结束遮罩 */}
