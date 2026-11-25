@@ -1120,4 +1120,26 @@ void main() {
     expect(cluster.top, greaterThanOrEqualTo(topBar.bottom - 0.5));
     expect(cluster.bottom, lessThanOrEqualTo(panel.top + 0.5));
   });
+
+  // ------------------------------------------- AP-15：旋转后画面几何
+
+  // 本 Bug 属真机 TLHC 纹理层几何不同步，Widget 测试无法复现纹理层 latch；
+  // 这里只保证竖 / 横屏下播放页均正常构建、三段式关键容器齐全、无布局异常。
+  for (final entry in <String, Size>{
+    '竖屏 420×900': const Size(420, 900),
+    '横屏 900×420': const Size(900, 420),
+  }.entries) {
+    testWidgets('${entry.key}：播放页正常构建，中央簇与底栏浮层均在，无布局异常',
+        (tester) async {
+      final channels = _PlayerChannels()..install();
+      await _pumpPlayer(tester, channels, size: entry.value);
+
+      expect(tester.takeException(), isNull, reason: '${entry.key} 不应有布局异常');
+      // 三段式关键容器在旋转前后均存在（控制层结构不随方向改变）。
+      expect(find.byKey(kPlayerCenterControlsKey), findsOneWidget);
+      expect(find.byKey(kPlayerControlPanelKey), findsOneWidget);
+      // 画面承载层 Center > AspectRatio > AndroidView 仍在树中。
+      expect(find.byType(AndroidView), findsOneWidget);
+    });
+  }
 }

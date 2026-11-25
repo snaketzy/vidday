@@ -199,6 +199,20 @@ class NativePlayerView(
         player.addListener(this)
         pipSupported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
             activity.packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)
+        // TLHC（Texture Layer Hybrid Composition）下画面渲染进 TextureLayer：旋转导致
+        // 承载尺寸变化时，Flutter 侧已按新方向重新布局，但纹理层几何不会自行同步——
+        // 暂停态没有新视频帧推动重新 latch，画面遂保持旧（竖屏）几何贴到左上角。
+        // 这里监听 rootView 的 bounds 变化，主动重排 / 重绘促使纹理层以新几何重新 latch。
+        rootView.addOnLayoutChangeListener {
+                _, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
+            if (left != oldLeft || top != oldTop || right != oldRight || bottom != oldBottom) {
+                rootView.post {
+                    rootView.requestLayout()
+                    playerView.invalidate()
+                    rootView.invalidate()
+                }
+            }
+        }
         load()
         handler.postDelayed(ticker, TICK_MS)
     }
