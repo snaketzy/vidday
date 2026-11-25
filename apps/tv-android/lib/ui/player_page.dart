@@ -32,6 +32,9 @@ const Key kPlayerSeekBarKey = ValueKey<String>('player-seek-bar');
 /// 拖动时进度条上方的目标时间气泡。
 const Key kPlayerSeekBubbleKey = ValueKey<String>('player-seek-bubble');
 
+/// 音量弹层的内容根节点（紧凑单行），供测试量取弹层内容高度。
+const Key kPlayerVolumeSheetKey = ValueKey<String>('player-volume-sheet');
+
 /// 播放页。
 ///
 /// 进入播放页不会自动全屏、也不强制横屏：由用户点击控制栏的「全屏」自行切换。
@@ -479,17 +482,16 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
     );
   }
 
-  /// 音量弹层：对齐 Web 音量 Popover 的三段结构。
+  /// 音量弹层：紧凑单行 `[音量图标按钮] [滑块] [百分比读数]`。
   ///
-  /// ①静音 / 取消静音 切换按钮；②「音量」标签 + 百分比读数（静音为 0%）；
-  /// ③音量滑块。弹层是独立路由，页面 `setState` 不会重建它，故直接用
-  /// [ValueListenableBuilder] 监听真实快照，保证静音后文案与百分比立即正确。
+  /// 行高 48dp，内容高度约 80dp（16 + 48 + 16）。弹层是独立路由，页面
+  /// `setState` 不会重建它，故直接用 [ValueListenableBuilder] 监听真实快照，
+  /// 保证图标、滑块与百分比跟随真实状态刷新。
   Future<void> _openVolume() async {
     _keepVisible();
     await showModalBottomSheet<void>(
       context: context,
       backgroundColor: const Color(0xFF16161C),
-      showDragHandle: true,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
       ),
@@ -503,53 +505,49 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
                 isMuted ? 0 : snapshot.volume.clamp(0.0, 1.0).toDouble();
             return SafeArea(
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: <Widget>[
-                    // ①静音 / 取消静音 切换（带音量图标）
-                    ListTile(
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 8),
-                      leading: Icon(
-                        isMuted ? Icons.volume_off : Icons.volume_up,
-                        color: Colors.white,
+                key: kPlayerVolumeSheetKey,
+                padding: const EdgeInsets.fromLTRB(8, 16, 16, 16),
+                child: SizedBox(
+                  height: 48,
+                  child: Row(
+                    children: <Widget>[
+                      // 静音 / 取消静音 切换（带音量图标）。
+                      // 注意：本按钮与滑块都不得再使用 '音量' 的 tooltip，
+                      // 底栏音量入口按钮已占用该 tooltip 供测试唯一定位。
+                      IconButton(
+                        tooltip: isMuted ? '取消静音' : '静音',
+                        // M3 默认 minimumSize 仅 40dp，显式抬到 48dp 保证触摸目标。
+                        constraints: const BoxConstraints(
+                          minWidth: 48,
+                          minHeight: 48,
+                        ),
+                        icon: Icon(
+                          isMuted ? Icons.volume_off : Icons.volume_up,
+                          color: Colors.white,
+                        ),
+                        onPressed: () => unawaited(_toggleMute(snapshot)),
                       ),
-                      title: Text(
-                        isMuted ? '取消静音' : '静音',
-                        style: const TextStyle(color: Colors.white),
+                      // 音量滑块：拖动即设为音量（非零值同步记住，供取消静音恢复）。
+                      Expanded(
+                        child: Slider(
+                          value: level,
+                          onChanged: (value) {
+                            if (value > 0) _lastVolume = value;
+                            unawaited(_controller.setVolume(value));
+                          },
+                        ),
                       ),
-                      onTap: () => unawaited(_toggleMute(snapshot)),
-                    ),
-                    // ②「音量」标签 + 百分比读数
-                    Padding(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 4),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: <Widget>[
-                          const Text(
-                            '音量',
-                            style:
-                                TextStyle(color: Colors.white70, fontSize: 13),
-                          ),
-                          Text(
-                            '${(level * 100).round()}%',
-                            style: const TextStyle(
-                                color: Colors.white70, fontSize: 13),
-                          ),
-                        ],
+                      // 百分比读数：固定宽度右对齐，避免读数变化引起布局抖动。
+                      SizedBox(
+                        width: 52,
+                        child: Text(
+                          '${(level * 100).round()}%',
+                          textAlign: TextAlign.right,
+                          style: const TextStyle(color: Colors.white70),
+                        ),
                       ),
-                    ),
-                    // ③音量滑块：拖动即设为音量（非零值同步记住，供取消静音恢复）
-                    Slider(
-                      value: level,
-                      onChanged: (value) {
-                        if (value > 0) _lastVolume = value;
-                        unawaited(_controller.setVolume(value));
-                      },
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             );
