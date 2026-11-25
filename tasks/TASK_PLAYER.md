@@ -217,6 +217,30 @@
   - 测试须覆盖：**横屏**底栏的 `padding.bottom` 等于 **26**（例如断言承载底栏的 `Padding` 的 `EdgeInsets.only(bottom: 26)` 或等价可观测项）；**竖屏**仍为 `12`（compact 宽度）/ `24`（非 compact 宽度），即竖屏断言**逐字不变**；`AP-12` 既有断言（中央簇居中于可用区、两间隙相等、按钮行与时间轴的行序、9 键同一行无溢出）全部继续通过。
   - 交付 Git Commit、变更文件清单、测试输出与未验证项；release 包与真机复验由主 Agent 负责。
 
+### AP-14｜音量弹层压缩为紧凑单行（用户指定）
+- **负责人 / 工作树 / 分支 / 模块：** Android UI 子 Agent，`viddy-android-ui` / `feature/android-ui`，AND-PLAYER；工作树 HEAD 现为 `ff5ed488f7fafdf46fdf95cc6569312b2368c0cb`（`AP-13`），工作区干净，须在其之上开发。
+- **用户指令：** 「点击声音调整，声音面板高度太大了」。主 Agent 真机实测后追问规格，用户选定**紧凑单行**方案。
+- **现行实测（真机，横屏 3088×1440、密度 600，1dp = 3.75px；模糊截图逐行像素扫描，弹层 y 694–1439 / x 394–2793）：**
+  - `_openVolume`（`player_page.dart:487-561`）的 `showModalBottomSheet` 高 **750px = 200dp**，逐层实测：`showDragHandle` 拖拽把柄区 **48dp**（把柄药丸 4dp，位于弹层顶下方 22–27dp）→ 上内边距 **4dp** → `ListTile` 静音行 **56dp** → 标签行「音量 / xx%」**28dp** → `Slider` **48dp** → 下内边距 **16dp**。合计 200dp，与代码逐项吻合。
+  - 弹层宽度为 **640dp**（居中），这是 Material 3 `BottomSheet` 的默认 `maxWidth` 约束，**与本卡无关，不要改**。
+- **目标 / 功能（用户选定，硬性）：**
+  1. 弹层内容改为**单行**：`[音量图标按钮] [滑块（占满剩余宽度）] [百分比读数]`；行高 **48dp**（`IconButton` 与 `Slider` 的最小高度均 ≥48dp，**命中区必须保持 ≥48dp**）。
+  2. **删除 `showDragHandle: true`**。弹层仍可下拉关闭（`enableDrag` 默认 `true`）与点遮罩关闭，不得因此把弹层改成不可关闭。
+  3. 音量图标按钮：图标随状态在 `Icons.volume_off` / `Icons.volume_up` 间切换；`tooltip` 为静音时 `'取消静音'`、未静音时 `'静音'`；`onPressed` 走现有 `_toggleMute(snapshot)`。**静音语义一行不得改**：静音 = `setVolume(0)`；取消静音 = 恢复 `_lastVolume`（无效或为 0 时回落 1.0）。
+  4. 滑块与百分比沿用现有语义：`level = (snapshot.muted || snapshot.volume == 0) ? 0 : snapshot.volume.clamp(0,1)`；`onChanged` 内 `if (value > 0) _lastVolume = value;` 后 `setVolume(value)`；百分比文本 `'${(level * 100).round()}%'`，**固定宽度（约 52dp）右对齐**，避免读数变化引起布局抖动。
+  5. 内边距：`EdgeInsets.fromLTRB(8, 16, 16, 16)`（`IconButton` 自带 8dp 视觉内边距，故左侧取 8dp 使图标视觉对齐弹层左内边距）。
+  - **目标高度：弹层内容 ≤ 92dp（不含 `SafeArea` 底部内边距）**，预期约 **80dp**（16 + 48 + 16），相对现状 **200dp** 降幅约 **60%**。
+  - 新增公开常量 `kPlayerVolumeSheetKey = ValueKey<String>('player-volume-sheet')`，挂在弹层内容根节点（内边距的 `Padding` 之外或之内均可，但须能代表弹层内容高度），供测试量高。
+- **保留（不得回退）：** `AP-05` 的「快照为唯一状态来源」——弹层是独立路由，页面 `setState` 不会重建它，**必须继续用 `ValueListenableBuilder<PlayerSnapshot>`（监听 `_controller.snapshot`）** 让图标、滑块与百分比跟随真实状态；弹层背景 `Color(0xFF16161C)` 与顶部圆角 18dp；`AP-12` 的底栏骨架与交互（3.2s 超时且仅播放中隐藏、暂停常驻、触摸唤出）；`AP-06` 的品牌色。
+- **易踩的坑（务必遵守）：** 不要给新滑块或新按钮添加 `'音量'` 的 `tooltip` / 语义标签——底栏音量入口按钮已用 `tooltip: '音量'`，测试助手 `_openVolumeSheet` 靠 `find.byTooltip('音量')` 唯一定位它，多一个就会 `findsNWidgets` 失败。
+- **已知问题（不在本卡范围，只登记不改）：** 主 Agent 发现弹层打开期间 `uiautomator` 始终无法取得 idle，推断弹层随 `PlayerSnapshot`（含播放位置等无关字段）高频重建。属性能优化，本卡不动，另行立卡。
+- **写入 / 禁区：** `apps/tv-android/lib/ui/player_page.dart`、`apps/tv-android/test/player_controls_test.dart`。禁改其余全部文件（含 `ui/detail_page.dart`、`ui/person_page.dart`、`ui/expandable_text.dart`、`ui/widgets.dart`、`core/**`、Kotlin 原生层、`pubspec.yaml`、Gradle 配置、Web 端、服务端及其他工作树）。
+- **输出 / 验收 / 交付：**
+  - `flutter test`（全量）全过；`dart analyze` 无新增告警。
+  - **必须同步改写** `test/player_controls_test.dart` 中依赖旧结构的断言：`find.text('静音')`、`find.text('取消静音')`（旧 `ListTile` 文案）与 `find.text('音量')`（旧标签行）在新结构下**均不存在**，须改用 `find.byTooltip('静音')` / `find.byTooltip('取消静音')` 与 `find.byIcon(Icons.volume_off)` / `find.byIcon(Icons.volume_up)`；`find.byType(Slider)` 与 `setVolume` 相关断言保留。
+  - 测试须新增断言：`kPlayerVolumeSheetKey` 的高度 **≤ 92dp**；弹层内 `find.text('静音')` / `find.text('取消静音')` / `find.text('音量')` 均为 `findsNothing`；单行三元素（图标按钮、`Slider`、百分比 `Text`）**垂直中心一致（±2dp）**；图标按钮命中区 **≥48dp**；静音切换 / 取消静音恢复 / 拖动滑块 / 百分比读数一致的既有行为断言全部继续通过。
+  - 附变更文件清单、测试输出、改造前后弹层高度（dp）与未验证项；交付授权分支上的 Git Commit。release 包与真机复验由主 Agent 负责（主 Agent 会用模糊截图像素扫描复核弹层高度）。
+
 ## Apple 端调研（仅文档）
 
 ### IOS-PLAY-01｜iOS 播放能力与生命周期评估
