@@ -241,6 +241,29 @@
   - 测试须新增断言：`kPlayerVolumeSheetKey` 的高度 **≤ 92dp**；弹层内 `find.text('静音')` / `find.text('取消静音')` / `find.text('音量')` 均为 `findsNothing`；单行三元素（图标按钮、`Slider`、百分比 `Text`）**垂直中心一致（±2dp）**；图标按钮命中区 **≥48dp**；静音切换 / 取消静音恢复 / 拖动滑块 / 百分比读数一致的既有行为断言全部继续通过。
   - 附变更文件清单、测试输出、改造前后弹层高度（dp）与未验证项；交付授权分支上的 Git Commit。release 包与真机复验由主 Agent 负责（主 Agent 会用模糊截图像素扫描复核弹层高度）。
 
+### AP-15｜竖屏↔横屏切换后画面偏移到左上角（TLHC 纹理层几何不同步）
+- **负责人 / 工作树 / 分支 / 模块：** Android UI 子 Agent，`viddy-android-ui` / `feature/android-ui`，AND-PLAYER 播放页 + 原生承载层；基线 `2312ca7c23dcc78e867c2e0000433cbec4144049`（工作树 HEAD，含 `AP-14`），工作区干净，须在其之上开发，不得回退既有卡片。
+- **缺陷（主 Agent 真机复现并量化）：** 竖屏点全屏转横屏后，**暂停态**画面被压小并顶到**左上角**、右下方大片黑；恢复播放后自愈居中。
+  - 设备 SM-S9180，横屏画布 3088×1440，密度 600（1dp = 3.75px）。
+  - 错位帧（暂停）：内容**贴左**，宽度约占画布 **44%（≈1360px ≈ 竖屏宽度 1440px）**，行投影集中在 y=112..704。
+  - 居中帧（播放）：宽度约占 **82.9%（≈2560px = 16:9 × 1440）**，行投影 y=176..816。
+  - 暂停态**持续 ≥3s 不消失**，一旦恢复播放即自愈。全仓 Grep 确认无历史记录（新问题）。
+- **根因：** `AndroidView` 走 **Texture Layer Hybrid Composition（TLHC）**，原生画面渲染进 TextureLayer；旋转时 Flutter 侧 `Center > AspectRatio` 已按新方向重新布局，但**纹理层的几何未同步更新**——暂停时没有新视频帧推动重新 latch，纹理层保持旧（竖屏）几何，画面遂被绘制到左上角且只有竖屏宽；恢复播放产生新帧，纹理层重新 latch 即自愈。
+  - 依据：Flutter 官方平台视图文档——**含 `SurfaceView` / `SurfaceTexture` 的平台视图不会自行 invalidate，必须在绘制后手动 `invalidate` 其自身或父视图**；本仓 [vidday_player_view.xml](../apps/tv-android/android/app/src/main/res/layout/vidday_player_view.xml) 注释亦已声明必须用 `texture_view`。
+- **目标 / 功能（硬性）：**
+  1. 竖屏→横屏、横屏→竖屏**双向**切换后，暂停态与播放态画面**均居中且按 `AspectRatio` 铺满**，无左上偏移、无被压小。
+  2. **不得重启播放**：切换前后播放位置不重置、不重新缓冲起播。
+  3. 不得回退 `AP-12` / `AP-13` / `AP-14` 的布局与交互（三段式骨架、3.2s 仅播放中隐藏、暂停常驻、触摸唤出、底栏 6 按钮 + 时间轴、音量弹层紧凑单行）。
+- **建议修法（首选，原生侧）：** 在 [NativePlayerView.kt](../apps/tv-android/android/app/src/main/kotlin/com/vidday/vidday_tv/NativePlayerView.kt) 的 `init` 中给 `rootView` 注册 `addOnLayoutChangeListener`，当视图 bounds 变化（即旋转导致承载尺寸变化）时 `post { rootView.requestLayout(); playerView.invalidate(); rootView.invalidate() }`，强制原生视图重排/重绘，促使 TLHC 纹理层以新几何重新 latch。理由见上「根因」依据。
+- **备选修法（仅在首选真机验证失败后使用，须先报主 Agent 批准）：** Dart 侧在 `_toggleFullscreen` 完成方向切换后触发一次额外布局（如极短尺寸微调再复位）。**严禁**给 `AndroidView` 换 `key`——换 key 会重建原生播放器（`PlayerPlugin.create()` 每次 `new NativePlayerView`，其构造函数直接创建 `ExoPlayer` 并 `load()`），导致播放重启、丢失位置。
+- **共享文件交接：** `NativePlayerView.kt` 亦在 `AP-02`（`viddy-android-player` / `feature/android-player`）的写入白名单内，但该卡尚未开工（工作树在 `f89eeb9`）。本卡期间由本卡独占写入该文件；合入前若 `AP-02` 已启动，须先报主 Agent 协调。
+- **写入 / 禁区：** `apps/tv-android/android/app/src/main/kotlin/com/vidday/vidday_tv/NativePlayerView.kt`、`apps/tv-android/lib/ui/player_page.dart`；可扩展 `apps/tv-android/test/player_controls_test.dart`。**禁改** `PlayerPlugin.kt`、`MainActivity.kt`、`vidday_player_view.xml`、`ui/widgets.dart`、`core/**`、`ui/detail_page.dart`、`ui/person_page.dart`、`ui/expandable_text.dart`、`pubspec.yaml`、Gradle 配置、Web 端、服务端及其他工作树；**不得新增或修改 MethodChannel 公开方法**（如确需，先报主 Agent）。
+- **输出 / 验收 / 交付：**
+  - `dart analyze lib test` 无新增告警；`flutter test`（全量）全过。
+  - 原生改动不得改变既有通道契约与 `emitState()` 字段。
+  - Widget 测试：至少断言播放页在竖屏（`420×900`）与横屏（`900×420`）下均正常构建、`kPlayerCenterControlsKey` / `kPlayerControlPanelKey` 存在，且既有 `AP-12` / `AP-13` / `AP-14` 断言继续通过（本 Bug 属真机渲染层，无法用 Widget 测试覆盖，须在报告中如实标注）。
+  - 交付 Git Commit、变更文件清单、测试输出与未验证项。**release 包与真机复验（竖屏↔横屏双向、暂停态与播放态、位置不重置）由主 Agent 负责**；无真机证据不得宣称通过。
+
 ## Apple 端调研（仅文档）
 
 ### IOS-PLAY-01｜iOS 播放能力与生命周期评估
