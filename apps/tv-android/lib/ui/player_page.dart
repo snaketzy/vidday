@@ -740,7 +740,7 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
   /// 两行**恒有**：上排 6 个次级按钮（音量 / 画质 / 音轨 / 字幕 /（画中画）/ 全屏），
   /// 下排时间轴 `[当前时间][进度条][总时长]`；横竖屏一致，仅按宽度自适应。
   ///
-  /// `bottomGap = landscape ? 36 : (compact ? 12 : 24)`；`padding = compact ? 8 : 16`；
+  /// `bottomGap = landscape ? 26 : (compact ? 12 : 24)`；`padding = compact ? 8 : 16`；
   /// `rowGap = compact ? 6 : 8`；横屏宽度 `min(屏宽 × 3/4, 768)` 且水平居中，
   /// 竖屏 `maxWidth 768`。圆角 12dp、1dp `white/15` 描边、`black/85` 背景、投影；
   /// 面板为纯半透明（无毛玻璃、无 `BackdropFilter`）。
@@ -748,7 +748,7 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
     final double screenWidth = MediaQuery.sizeOf(context).width;
     final bool landscape =
         MediaQuery.of(context).orientation == Orientation.landscape;
-    final double bottomGap = landscape ? 36 : (compact ? 12 : 24);
+    final double bottomGap = landscape ? 26 : (compact ? 12 : 24);
     final double padding = compact ? 8 : 16;
     final double rowGap = compact ? 6 : 8;
     // 横屏宽度 = 屏幕宽度 × 3/4，并保留 768dp 上限；竖屏沿用 calc(100% - 16dp) + 768dp 上限。
